@@ -14,3 +14,7 @@ license = "BSD-3-Clause"
 keywords = ["fst", "waveform", "wavedump"]
 
 [dependencies]
+thiserror = "1.0.64"
+
+[dev-dependencies]
+fst-native = "0.8.1"
