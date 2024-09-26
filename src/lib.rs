@@ -4,6 +4,7 @@
 
 mod io;
 mod writer;
+mod types;
 
 type Result<T> = std::result::Result<T, FstWriteError>;
 

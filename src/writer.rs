@@ -2,17 +2,11 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
-use crate::io::{write_header, FstFileType, Header};
+use crate::io::{write_header, Header};
 use crate::{FstWriteError, Result};
+use crate::types::FstFileType;
 
-pub struct FstInfo {
-    pub start_time: u64,
-    // TODO: better abstraction
-    pub timescale_exponent: i8,
-    pub version: String,
-    pub date: String,
-    pub file_type: FstFileType,
-}
+
 
 pub fn open_fst<P: AsRef<std::path::Path>>(
     path: P,
@@ -52,8 +46,8 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         self.scope_depth -= 1;
     }
 
-    pub fn var(&mut self, name: impl AsRef<str>, width: u32) {
-        println!("var {} {width}", name.as_ref());
+    pub fn var(&mut self, id: u64, name: impl AsRef<str>, width: u32) {
+        println!("var {id} {} {width}", name.as_ref());
     }
 
     pub fn finish(self) -> FstBodyWriter<W> {

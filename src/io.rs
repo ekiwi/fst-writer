@@ -86,13 +86,6 @@ const HEADER_VERSION_MAX_LEN: usize = 128;
 const HEADER_DATE_MAX_LEN: usize = 119;
 const DOUBLE_ENDIAN_TEST: f64 = std::f64::consts::E;
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FstFileType {
-    Verilog = 0,
-    Vhdl = 1,
-    VerilogVhdl = 2,
-}
 
 #[repr(u8)]
 #[derive(Debug, PartialEq)]
