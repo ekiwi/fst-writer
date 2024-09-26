@@ -5,6 +5,8 @@
 mod io;
 mod writer;
 
+type Result<T> = std::result::Result<T, FstWriteError>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum FstWriteError {
     #[error("I/O operation failed")]

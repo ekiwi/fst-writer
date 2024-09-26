@@ -3,12 +3,14 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
-use crate::FstWriteError;
+use crate::{FstWriteError, Result};
 use std::io::Write;
 
-type Result<T> = std::result::Result<T, crate::FstWriteError>;
 #[inline]
-pub(crate) fn write_variant_u64(output: &mut impl Write, mut value: u64) -> Result<usize> {
+pub(crate) fn write_variant_u64(
+    output: &mut impl Write,
+    mut value: u64,
+) -> Result<usize> {
     // often, the value is small
     if value <= 0x7f {
         let byte = [value as u8; 1];
@@ -56,7 +58,11 @@ fn write_c_str(output: &mut impl Write, value: &str) -> Result<()> {
 }
 
 #[inline]
-fn write_c_str_fixed_length(output: &mut impl Write, value: &str, max_len: usize) -> Result<()> {
+fn write_c_str_fixed_length(
+    output: &mut impl Write,
+    value: &str,
+    max_len: usize,
+) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.len() >= max_len {
         return Err(FstWriteError::StringTooLong(max_len, value.to_string()));
@@ -122,7 +128,10 @@ pub(crate) struct Header {
 }
 
 #[allow(dead_code)]
-pub(crate) fn write_header(output: &mut impl Write, header: &Header) -> Result<()> {
+pub(crate) fn write_header(
+    output: &mut impl Write,
+    header: &Header,
+) -> Result<()> {
     write_u8(output, BlockType::Hierarchy as u8)?;
     write_u64(output, HEADER_LENGTH)?;
     write_u64(output, header.start_time)?;
