@@ -15,4 +15,5 @@ pub enum FstWriteError {
     StringTooLong(usize, String),
 }
 
-pub use writer::FstWriter;
+pub use io::FstFileType;
+pub use writer::{open_fst, FstBodyWriter, FstHeaderWriter, FstInfo};

@@ -88,7 +88,7 @@ const DOUBLE_ENDIAN_TEST: f64 = std::f64::consts::E;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FileType {
+pub enum FstFileType {
     Verilog = 0,
     Vhdl = 1,
     VerilogVhdl = 2,
@@ -123,7 +123,7 @@ pub(crate) struct Header {
     pub(crate) timescale_exponent: i8,
     pub(crate) version: String,
     pub(crate) date: String,
-    pub(crate) file_type: FileType,
+    pub(crate) file_type: FstFileType,
     pub(crate) time_zero: u64,
 }
 
