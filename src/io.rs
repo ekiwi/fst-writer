@@ -3,8 +3,11 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
-use crate::{FstWriteError, Result};
-use std::io::Write;
+use crate::{
+    FstFileType, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
+    FstVarType, FstWriteError, Result,
+};
+use std::io::{Seek, SeekFrom, Write};
 
 #[inline]
 pub(crate) fn write_variant_u64(
@@ -50,8 +53,8 @@ fn write_i8(output: &mut impl Write, value: i8) -> Result<()> {
     Ok(())
 }
 
-fn write_c_str(output: &mut impl Write, value: &str) -> Result<()> {
-    let bytes = value.as_bytes();
+fn write_c_str(output: &mut impl Write, value: impl AsRef<str>) -> Result<()> {
+    let bytes = value.as_ref().as_bytes();
     output.write_all(bytes)?;
     write_u8(output, 0)?;
     Ok(())
@@ -86,10 +89,9 @@ const HEADER_VERSION_MAX_LEN: usize = 128;
 const HEADER_DATE_MAX_LEN: usize = 119;
 const DOUBLE_ENDIAN_TEST: f64 = std::f64::consts::E;
 
-
 #[repr(u8)]
 #[derive(Debug, PartialEq)]
-pub enum BlockType {
+enum BlockType {
     Header = 0,
     VcData = 1,
     Blackout = 2,
@@ -103,8 +105,8 @@ pub enum BlockType {
     Skip = 255,
 }
 
+//////////////// Header
 #[derive(Debug, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct Header {
     pub(crate) start_time: u64,
     pub(crate) end_time: u64,
@@ -120,12 +122,11 @@ pub(crate) struct Header {
     pub(crate) time_zero: u64,
 }
 
-#[allow(dead_code)]
 pub(crate) fn write_header(
     output: &mut impl Write,
     header: &Header,
 ) -> Result<()> {
-    write_u8(output, BlockType::Hierarchy as u8)?;
+    write_u8(output, BlockType::Header as u8)?;
     write_u64(output, HEADER_LENGTH)?;
     write_u64(output, header.start_time)?;
     write_u64(output, header.end_time)?;
@@ -140,5 +141,125 @@ pub(crate) fn write_header(
     write_c_str_fixed_length(output, &header.date, HEADER_DATE_MAX_LEN)?;
     write_u8(output, header.file_type as u8)?;
     write_u64(output, header.time_zero)?;
+    Ok(())
+}
+
+//////////////// Hierarchy
+
+const HIERARCHY_TPE_VCD_SCOPE: u8 = 254;
+const HIERARCHY_TPE_VCD_UP_SCOPE: u8 = 255;
+const HIERARCHY_TPE_VCD_ATTRIBUTE_BEGIN: u8 = 252;
+const HIERARCHY_TPE_VCD_ATTRIBUTE_END: u8 = 253;
+const HIERARCHY_NAME_MAX_SIZE: usize = 512;
+const HIERARCHY_ATTRIBUTE_MAX_SIZE: usize = 65536 + 4096;
+
+pub(crate) fn write_hierarchy_bytes(
+    output: &mut (impl Write + Seek),
+    bytes: &[u8],
+) -> Result<()> {
+    write_u8(output, BlockType::HierarchyLZ4 as u8)?;
+    // remember start to fix the section length afterward
+    let start = output.stream_position()?;
+    write_u64(output, 0)?; // dummy section length
+    let uncompressed_length = bytes.len() as u64;
+    write_u64(output, uncompressed_length)?;
+
+    // we only support single LZ4 compression
+    let out2 = {
+        let compressed = lz4_flex::compress(bytes);
+        output.write_all(&compressed)?;
+        output
+    };
+
+    // fix section length
+    let end = out2.stream_position()?;
+    out2.seek(SeekFrom::Start(start))?;
+    write_u64(out2, end - start)?;
+    out2.seek(SeekFrom::Start(end))?;
+    Ok(())
+}
+
+pub(crate) fn write_hierarchy_scope(
+    output: &mut impl Write,
+    name: impl AsRef<str>,
+    component: impl AsRef<str>,
+    tpe: FstScopeType,
+) -> Result<()> {
+    write_u8(output, HIERARCHY_TPE_VCD_SCOPE)?;
+    write_u8(output, tpe as u8)?;
+    debug_assert!(name.as_ref().len() <= HIERARCHY_NAME_MAX_SIZE);
+    write_c_str(output, name)?;
+    debug_assert!(component.as_ref().len() <= HIERARCHY_NAME_MAX_SIZE);
+    write_c_str(output, component)?;
+    Ok(())
+}
+
+pub(crate) fn write_hierarchy_up_scope(output: &mut impl Write) -> Result<()> {
+    write_u8(output, HIERARCHY_TPE_VCD_UP_SCOPE)
+}
+
+pub(crate) fn write_hierarchy_var(
+    output: &mut impl Write,
+    tpe: FstVarType,
+    direction: FstVarDirection,
+    name: impl AsRef<str>,
+    signal_tpe: FstSignalType,
+    alias: Option<FstSignalId>,
+) -> Result<()> {
+    write_u8(output, tpe as u8)?;
+    write_u8(output, direction as u8)?;
+    debug_assert!(name.as_ref().len() <= HIERARCHY_NAME_MAX_SIZE);
+    write_c_str(output, name)?;
+    let length = signal_tpe.len();
+    let raw_length = if tpe == FstVarType::Port {
+        3 * length + 2
+    } else {
+        length
+    };
+    write_variant_u64(output, raw_length as u64)?;
+    write_variant_u64(
+        output,
+        alias.map(|id| id.to_index()).unwrap_or_default() as u64,
+    )?;
+    Ok(())
+}
+
+//////////////// Geometry
+pub(crate) fn write_geometry_start(
+    output: &mut (impl Write + Seek),
+) -> Result<u64> {
+    write_u8(output, BlockType::Geometry as u8)?;
+    // remember start to fix the section header
+    let start = output.stream_position()?;
+    write_u64(output, 0)?; // dummy section length
+    write_u64(output, 0)?; // dummy uncompressed section length
+    write_u64(output, 0)?; // dummy max handle
+                           // return start to later fix up
+    Ok(start)
+}
+
+pub(crate) fn write_geometry_finish(
+    output: &mut (impl Write + Seek),
+    start: u64,
+    signal_count: u64,
+) -> Result<()> {
+    // remember the end
+    let end = output.stream_position()?;
+    // fix section header
+    let section_len = end - start;
+    output.seek(SeekFrom::Start(start))?;
+    write_u64(output, section_len)?; // section length
+    write_u64(output, section_len - 3 * 8)?; // uncompressed section _content_ length
+    write_u64(output, signal_count)?; // max handle
+                                      // return cursor back to end
+    output.seek(SeekFrom::Start(end))?;
+    Ok(())
+}
+
+pub(crate) fn write_geometry_entry(
+    output: &mut impl Write,
+    signal: FstSignalType,
+) -> Result<()> {
+    write_variant_u64(output, signal.to_file_format() as u64)?;
     Ok(())
 }

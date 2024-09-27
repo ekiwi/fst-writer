@@ -2,11 +2,15 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
-use crate::io::{write_header, Header};
-use crate::{FstWriteError, Result};
-use crate::types::FstFileType;
-
-
+use crate::io::{
+    write_geometry_entry, write_geometry_finish, write_geometry_start,
+    write_header, write_hierarchy_bytes, write_hierarchy_scope,
+    write_hierarchy_up_scope, write_hierarchy_var, Header,
+};
+use crate::{
+    FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
+    FstVarType, Result,
+};
 
 pub fn open_fst<P: AsRef<std::path::Path>>(
     path: P,
@@ -17,7 +21,11 @@ pub fn open_fst<P: AsRef<std::path::Path>>(
 
 pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
     out: W,
+    /// collect hierarchy section before compressing it
+    hierarchy_buf: std::io::Cursor<Vec<u8>>,
+    signal_count: u32,
     scope_depth: u64,
+    geometry_start: u64,
 }
 
 impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
@@ -28,34 +36,73 @@ impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
         let f = std::fs::File::create(path)?;
         let mut out = std::io::BufWriter::new(f);
         write_header_meta_data(&mut out, info)?;
+        let geometry_start = write_geometry_start(&mut out)?;
         Ok(Self {
             out,
+            hierarchy_buf: std::io::Cursor::new(Vec::new()),
+            signal_count: 0,
             scope_depth: 0,
+            geometry_start,
         })
     }
 }
 
 impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
-    pub fn scope(&mut self, name: impl AsRef<str>) {
-        println!("scope {}", name.as_ref());
+    pub fn scope(
+        &mut self,
+        name: impl AsRef<str>,
+        component: impl AsRef<str>,
+        tpe: FstScopeType,
+    ) -> Result<()> {
         self.scope_depth += 1;
+        write_hierarchy_scope(&mut self.hierarchy_buf, name, component, tpe)
     }
-    pub fn up_scope(&mut self) {
-        println!("up-scope");
+    pub fn up_scope(&mut self) -> Result<()> {
         debug_assert!(self.scope_depth > 0, "no scope to pop");
         self.scope_depth -= 1;
+        write_hierarchy_up_scope(&mut self.hierarchy_buf)
     }
 
-    pub fn var(&mut self, id: u64, name: impl AsRef<str>, width: u32) {
-        println!("var {id} {} {width}", name.as_ref());
+    pub fn var(
+        &mut self,
+        name: impl AsRef<str>,
+        signal_tpe: FstSignalType,
+        tpe: FstVarType,
+        dir: FstVarDirection,
+        alias: Option<FstSignalId>,
+    ) -> Result<FstSignalId> {
+        write_hierarchy_var(
+            &mut self.hierarchy_buf,
+            tpe,
+            dir,
+            name,
+            signal_tpe,
+            alias,
+        )?;
+        if let Some(alias) = alias {
+            debug_assert!(alias.to_index() <= self.signal_count);
+            Ok(alias)
+        } else {
+            self.signal_count += 1;
+            let id = FstSignalId::from_index(self.signal_count);
+            write_geometry_entry(&mut self.out, signal_tpe)?;
+            Ok(id)
+        }
     }
 
-    pub fn finish(self) -> FstBodyWriter<W> {
+    pub fn finish(mut self) -> Result<FstBodyWriter<W>> {
         debug_assert_eq!(
             self.scope_depth, 0,
             "missing calls to up-scope to close all scopes!"
         );
-        FstBodyWriter { out: self.out }
+        write_geometry_finish(
+            &mut self.out,
+            self.geometry_start,
+            self.signal_count as u64,
+        )?;
+        write_hierarchy_bytes(&mut self.out, &self.hierarchy_buf.into_inner())?;
+        let next = FstBodyWriter { out: self.out };
+        Ok(next)
     }
 }
 

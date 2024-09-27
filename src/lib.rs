@@ -3,8 +3,8 @@
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
 mod io;
-mod writer;
 mod types;
+mod writer;
 
 type Result<T> = std::result::Result<T, FstWriteError>;
 
@@ -16,5 +16,5 @@ pub enum FstWriteError {
     StringTooLong(usize, String),
 }
 
-pub use io::FstFileType;
-pub use writer::{open_fst, FstBodyWriter, FstHeaderWriter, FstInfo};
+pub use types::*;
+pub use writer::{open_fst, FstBodyWriter, FstHeaderWriter};
