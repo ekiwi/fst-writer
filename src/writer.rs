@@ -2,6 +2,7 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
+use crate::buffer::SignalBuffer;
 use crate::io::{
     write_geometry_entry, write_geometry_finish, write_geometry_start,
     write_header, write_hierarchy_bytes, write_hierarchy_scope,
@@ -101,18 +102,37 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
             self.signal_count as u64,
         )?;
         write_hierarchy_bytes(&mut self.out, &self.hierarchy_buf.into_inner())?;
-        let next = FstBodyWriter { out: self.out };
+        let next = FstBodyWriter {
+            out: self.out,
+            buffer: SignalBuffer::new(0)?,
+        };
         Ok(next)
     }
 }
 
 pub struct FstBodyWriter<W: std::io::Write + std::io::Seek> {
     out: W,
+    buffer: SignalBuffer,
 }
 
 impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
-    pub fn signal_change(&mut self) {
-        todo!()
+    pub fn time_change(&mut self, time: u64) -> Result<()> {
+        self.buffer.time_change(time)
+    }
+
+    pub fn signal_change(
+        &mut self,
+        signal_id: FstSignalId,
+        value: &[u8],
+    ) -> Result<()> {
+        self.buffer.signal_change(signal_id, value)
+    }
+
+    pub fn finish(mut self) -> Result<()> {
+        // write value change section
+        self.buffer.finish(&mut self.out)?;
+
+        Ok(())
     }
 }
 

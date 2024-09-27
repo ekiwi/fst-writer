@@ -263,3 +263,49 @@ pub(crate) fn write_geometry_entry(
     write_variant_u64(output, signal.to_file_format() as u64)?;
     Ok(())
 }
+
+//////////////// Value Change Data
+
+#[inline]
+pub(crate) fn write_time_chain_update(
+    output: &mut impl Write,
+    prev_time: u64,
+    current_time: u64,
+) -> Result<()> {
+    debug_assert!(current_time >= prev_time);
+    let delta = current_time - prev_time;
+    write_variant_u64(output, delta)?;
+    Ok(())
+}
+
+pub(crate) fn write_value_change_section(
+    output: &mut (impl Write + Seek),
+    start_time: u64,
+    end_time: u64,
+    time_table: &[u8],
+    time_table_entries: u64,
+) -> Result<()> {
+    write_u8(output, BlockType::VcData as u8)?;
+    // remember start to fix the section header
+    let start = output.stream_position()?;
+    write_u64(output, 0)?; // dummy section length
+    write_u64(output, start_time)?;
+    write_u64(output, end_time)?;
+
+    // TODO: write actual data
+
+    // time table at the end
+    output.write_all(time_table)?;
+    // we never compress the time table, so compressed and uncompressed length are always the same
+    write_u64(output, time_table.len() as u64)?;
+    write_u64(output, time_table.len() as u64)?;
+    write_u64(output, time_table_entries)?;
+
+    // fix section length
+    let end = output.stream_position()?;
+    let section_len = end - start;
+    output.seek(SeekFrom::Start(start))?;
+    write_u64(output, section_len)?;
+    output.seek(SeekFrom::Start(end))?;
+    Ok(())
+}

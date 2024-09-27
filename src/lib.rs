@@ -2,6 +2,7 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
+mod buffer;
 mod io;
 mod types;
 mod writer;
@@ -14,6 +15,10 @@ pub enum FstWriteError {
     Io(#[from] std::io::Error),
     #[error("The string is too large (max length: {0}): {1}")]
     StringTooLong(usize, String),
+    #[error(
+        "Cannot change the time from {0} to {1}. Time must always increase!"
+    )]
+    TimeDecrease(u64, u64),
 }
 
 pub use types::*;
