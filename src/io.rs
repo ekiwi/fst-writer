@@ -40,6 +40,13 @@ pub(crate) fn write_u64(output: &mut impl Write, value: u64) -> Result<()> {
     Ok(())
 }
 
+#[inline]
+pub(crate) fn write_u32(output: &mut impl Write, value: u32) -> Result<()> {
+    let buf = value.to_be_bytes();
+    output.write_all(&buf)?;
+    Ok(())
+}
+
 fn write_u8(output: &mut impl Write, value: u8) -> Result<()> {
     let buf = value.to_be_bytes();
     output.write_all(&buf)?;
@@ -113,7 +120,7 @@ pub(crate) struct Header {
     pub(crate) memory_used_by_writer: u64,
     pub(crate) scope_count: u64,
     pub(crate) var_count: u64,
-    pub(crate) max_var_id_code: u64, // aka maxhandle
+    pub(crate) max_signal_id: u64, // aka maxhandle
     pub(crate) vc_section_count: u64,
     pub(crate) timescale_exponent: i8,
     pub(crate) version: String,
@@ -134,7 +141,7 @@ pub(crate) fn write_header(
     write_u64(output, header.memory_used_by_writer)?;
     write_u64(output, header.scope_count)?;
     write_u64(output, header.var_count)?;
-    write_u64(output, header.max_var_id_code)?;
+    write_u64(output, header.max_signal_id)?;
     write_u64(output, header.vc_section_count)?;
     write_i8(output, header.timescale_exponent)?;
     write_c_str_fixed_length(output, &header.version, HEADER_VERSION_MAX_LEN)?;
@@ -225,24 +232,23 @@ pub(crate) fn write_hierarchy_var(
 }
 
 //////////////// Geometry
-pub(crate) fn write_geometry_start(
+
+pub(crate) fn write_geometry(
     output: &mut (impl Write + Seek),
-) -> Result<u64> {
+    signals: &[FstSignalType],
+) -> Result<()> {
     write_u8(output, BlockType::Geometry as u8)?;
     // remember start to fix the section header
     let start = output.stream_position()?;
     write_u64(output, 0)?; // dummy section length
     write_u64(output, 0)?; // dummy uncompressed section length
-    write_u64(output, 0)?; // dummy max handle
-                           // return start to later fix up
-    Ok(start)
-}
+    let max_handle = signals.len() as u64;
+    write_u64(output, max_handle)?;
 
-pub(crate) fn write_geometry_finish(
-    output: &mut (impl Write + Seek),
-    start: u64,
-    signal_count: u64,
-) -> Result<()> {
+    for signal in signals.iter() {
+        write_variant_u64(output, signal.to_file_format() as u64)?;
+    }
+
     // remember the end
     let end = output.stream_position()?;
     // fix section header
@@ -250,17 +256,9 @@ pub(crate) fn write_geometry_finish(
     output.seek(SeekFrom::Start(start))?;
     write_u64(output, section_len)?; // section length
     write_u64(output, section_len - 3 * 8)?; // uncompressed section _content_ length
-    write_u64(output, signal_count)?; // max handle
-                                      // return cursor back to end
+                                             // return cursor back to end
     output.seek(SeekFrom::Start(end))?;
-    Ok(())
-}
 
-pub(crate) fn write_geometry_entry(
-    output: &mut impl Write,
-    signal: FstSignalType,
-) -> Result<()> {
-    write_variant_u64(output, signal.to_file_format() as u64)?;
     Ok(())
 }
 
@@ -278,6 +276,87 @@ pub(crate) fn write_time_chain_update(
     Ok(())
 }
 
+/// start the value change section once the frame is complete
+pub(crate) fn write_value_change_section_start(
+    output: &mut (impl Write + Seek),
+    frame_values: &[u8],
+    max_signal_id: u32,
+) -> Result<u64> {
+    write_u8(output, BlockType::VcData as u8)?;
+    // remember start to fix the section header
+    let start = output.stream_position()?;
+    write_u64(output, 0)?; // dummy section length
+    write_u64(output, 0)?; // dummy start time
+    write_u64(output, 0)?; // dummy end time
+
+    // TODO: what is this value?
+    write_u64(output, 0)?;
+
+    // write frame
+    let uncompressed_length = frame_values.len() as u64;
+    // we do not support gzip right now and frames cannot be lz4 compressed
+    let compressed_length = frame_values.len() as u64;
+    write_variant_u64(output, uncompressed_length)?;
+    write_variant_u64(output, compressed_length)?;
+    write_variant_u64(output, max_signal_id as u64)?;
+    output.write_all(frame_values)?;
+
+    // return section start
+    Ok(start)
+}
+
+const VALUE_CHANGE_PACK_TYPE_LZ4: u8 = b'4';
+
+/// Writes out the offsets for each signal value stream in the "alias 2" encoding.
+/// The original FST source code calls this data structure a "chain table"
+fn write_offset_table(
+    output: &mut (impl Write + Seek),
+    offsets: &[u64],
+) -> Result<()> {
+    let mut zero_count = 0;
+    for offset in offsets {
+        if *offset == 0 {
+            zero_count += 1;
+        } else {
+            // if there were any leading zeros, commit them to the output stream
+            flush_zeros(output, &mut zero_count)?;
+            // indicate that this is a real value and not just a sequence of zeros
+            write_u8(output, 1)?;
+
+            todo!("how does the actual encoding here work?");
+        }
+    }
+    flush_zeros(output, &mut zero_count)?;
+
+    Ok(())
+}
+
+#[inline]
+fn flush_zeros(
+    output: &mut (impl Write + Seek),
+    zeros: &mut u32,
+) -> Result<()> {
+    if *zeros > 0 {
+        // shifted by one because bit0 indicates whether we are dealing with a zero or a real offset
+        let value = *zeros << 1;
+        write_variant_u64(output, value as u64)?;
+        *zeros = 0;
+    }
+    debug_assert_eq!(*zeros, 0);
+    Ok(())
+}
+
+pub(crate) fn write_value_changes(
+    output: &mut (impl Write + Seek),
+    max_signal_id: u32,
+) -> Result<()> {
+    write_variant_u64(output, max_signal_id as u64)?;
+    // we always use lz4 for compression
+    write_u8(output, VALUE_CHANGE_PACK_TYPE_LZ4)?;
+
+    // write "chain table", i.e. the data structure that tells us where each signal starts
+}
+
 pub(crate) fn write_value_change_section(
     output: &mut (impl Write + Seek),
     start_time: u64,
@@ -285,7 +364,7 @@ pub(crate) fn write_value_change_section(
     time_table: &[u8],
     time_table_entries: u64,
 ) -> Result<()> {
-    write_u8(output, BlockType::VcData as u8)?;
+    write_u8(output, BlockType::VcDataDynamicAlias2 as u8)?;
     // remember start to fix the section header
     let start = output.stream_position()?;
     write_u64(output, 0)?; // dummy section length

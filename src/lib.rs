@@ -19,6 +19,8 @@ pub enum FstWriteError {
         "Cannot change the time from {0} to {1}. Time must always increase!"
     )]
     TimeDecrease(u64, u64),
+    #[error("Invalid signal id: {0:?}")]
+    InvalidSignalId(FstSignalId),
 }
 
 pub use types::*;

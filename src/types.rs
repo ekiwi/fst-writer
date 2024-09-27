@@ -30,8 +30,13 @@ impl FstSignalId {
         FstSignalId(NonZeroU32::new(index).unwrap())
     }
 
+    /// The raw value used in the FST file format.
     pub(crate) fn to_index(&self) -> u32 {
         self.0.get()
+    }
+
+    pub(crate) fn to_array_index(&self) -> usize {
+        self.0.get() as usize - 1
     }
 }
 

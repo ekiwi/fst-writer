@@ -4,8 +4,7 @@
 
 use crate::buffer::SignalBuffer;
 use crate::io::{
-    write_geometry_entry, write_geometry_finish, write_geometry_start,
-    write_header, write_hierarchy_bytes, write_hierarchy_scope,
+    write_geometry, write_header, write_hierarchy_bytes, write_hierarchy_scope,
     write_hierarchy_up_scope, write_hierarchy_var, Header,
 };
 use crate::{
@@ -24,9 +23,8 @@ pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
     out: W,
     /// collect hierarchy section before compressing it
     hierarchy_buf: std::io::Cursor<Vec<u8>>,
-    signal_count: u32,
+    signals: Vec<FstSignalType>,
     scope_depth: u64,
-    geometry_start: u64,
 }
 
 impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
@@ -37,13 +35,11 @@ impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
         let f = std::fs::File::create(path)?;
         let mut out = std::io::BufWriter::new(f);
         write_header_meta_data(&mut out, info)?;
-        let geometry_start = write_geometry_start(&mut out)?;
         Ok(Self {
             out,
             hierarchy_buf: std::io::Cursor::new(Vec::new()),
-            signal_count: 0,
+            signals: vec![],
             scope_depth: 0,
-            geometry_start,
         })
     }
 }
@@ -81,12 +77,11 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
             alias,
         )?;
         if let Some(alias) = alias {
-            debug_assert!(alias.to_index() <= self.signal_count);
+            debug_assert!(alias.to_index() <= self.signals.len() as u32);
             Ok(alias)
         } else {
-            self.signal_count += 1;
-            let id = FstSignalId::from_index(self.signal_count);
-            write_geometry_entry(&mut self.out, signal_tpe)?;
+            self.signals.push(signal_tpe);
+            let id = FstSignalId::from_index(self.signals.len() as u32);
             Ok(id)
         }
     }
@@ -96,15 +91,12 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
             self.scope_depth, 0,
             "missing calls to up-scope to close all scopes!"
         );
-        write_geometry_finish(
-            &mut self.out,
-            self.geometry_start,
-            self.signal_count as u64,
-        )?;
         write_hierarchy_bytes(&mut self.out, &self.hierarchy_buf.into_inner())?;
+        write_geometry(&mut self.out, &self.signals)?;
+        let buffer = SignalBuffer::new(&self.signals, 0)?;
         let next = FstBodyWriter {
             out: self.out,
-            buffer: SignalBuffer::new(0)?,
+            buffer,
         };
         Ok(next)
     }
@@ -117,7 +109,7 @@ pub struct FstBodyWriter<W: std::io::Write + std::io::Seek> {
 
 impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     pub fn time_change(&mut self, time: u64) -> Result<()> {
-        self.buffer.time_change(time)
+        self.buffer.time_change(&mut self.out, time)
     }
 
     pub fn signal_change(
@@ -131,7 +123,7 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     pub fn finish(mut self) -> Result<()> {
         // write value change section
         self.buffer.finish(&mut self.out)?;
-
+        // TODO: update header with final data
         Ok(())
     }
 }
@@ -155,7 +147,7 @@ fn write_header_meta_data<W: std::io::Write + std::io::Seek>(
         memory_used_by_writer: 0,
         scope_count: 0,
         var_count: 0,
-        max_var_id_code: 0,
+        max_signal_id: 0,
         vc_section_count: 0,
         timescale_exponent: info.timescale_exponent,
         version: info.version.clone(),
