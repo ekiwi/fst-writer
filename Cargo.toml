@@ -16,6 +16,7 @@ keywords = ["fst", "waveform", "wavedump"]
 [dependencies]
 lz4_flex = "0.11.3"
 thiserror = "1.0.64"
+twox-hash = { version = "1.6.3", default-features = false }
 
 [dev-dependencies]
 fst-native = "0.8.1"
