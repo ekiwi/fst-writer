@@ -51,10 +51,7 @@ fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
 }
 
 impl SignalBuffer {
-    pub(crate) fn new(
-        signals: &[FstSignalType],
-        start_time: u64,
-    ) -> Result<Self> {
+    pub(crate) fn new(signals: &[FstSignalType], start_time: u64) -> Result<Self> {
         let mut time_table = Vec::with_capacity(16);
         write_time_chain_update(&mut time_table, 0, start_time)?;
         let (signals, values_len) = gen_signal_info(signals);
@@ -76,18 +73,12 @@ impl SignalBuffer {
         new_time: u64,
     ) -> Result<()> {
         match new_time.cmp(&self.end_time) {
-            Ordering::Less => {
-                Err(FstWriteError::TimeDecrease(self.end_time, new_time))
-            }
+            Ordering::Less => Err(FstWriteError::TimeDecrease(self.end_time, new_time)),
             Ordering::Equal => Ok(()),
             Ordering::Greater => {
                 let first_time_step = self.time_table.is_empty();
 
-                write_time_chain_update(
-                    &mut self.time_table,
-                    self.end_time,
-                    new_time,
-                )?;
+                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
                 if first_time_step {
                     write_value_change_section_start(
                         output,
@@ -103,11 +94,7 @@ impl SignalBuffer {
         }
     }
 
-    pub(crate) fn signal_change(
-        &mut self,
-        signal_id: FstSignalId,
-        value: &[u8],
-    ) -> Result<()> {
+    pub(crate) fn signal_change(&mut self, signal_id: FstSignalId, value: &[u8]) -> Result<()> {
         let info = match self.signals.get_mut(signal_id.to_array_index()) {
             Some(info) => info,
             None => return Err(FstWriteError::InvalidSignalId(signal_id)),
@@ -118,14 +105,13 @@ impl SignalBuffer {
         let value_cow = if value.len() == len {
             Cow::Borrowed(value)
         } else {
-            let expanded = expand_special_vector_cases(value, len)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Failed to parse four state value: {} for signal of size {}",
-                        String::from_utf8_lossy(value),
-                        len
-                    )
-                });
+            let expanded = expand_special_vector_cases(value, len).unwrap_or_else(|| {
+                panic!(
+                    "Failed to parse four state value: {} for signal of size {}",
+                    String::from_utf8_lossy(value),
+                    len
+                )
+            });
             assert_eq!(expanded.len(), len);
             Cow::Owned(expanded)
         };
@@ -155,10 +141,7 @@ impl SignalBuffer {
         Ok(())
     }
 
-    pub(crate) fn finish(
-        &mut self,
-        output: &mut (impl Write + Seek),
-    ) -> Result<()> {
+    pub(crate) fn finish(&mut self, output: &mut (impl Write + Seek)) -> Result<()> {
         write_value_change_section(
             output,
             self.start_time,

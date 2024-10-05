@@ -15,9 +15,7 @@ pub enum FstWriteError {
     Io(#[from] std::io::Error),
     #[error("The string is too large (max length: {0}): {1}")]
     StringTooLong(usize, String),
-    #[error(
-        "Cannot change the time from {0} to {1}. Time must always increase!"
-    )]
+    #[error("Cannot change the time from {0} to {1}. Time must always increase!")]
     TimeDecrease(u64, u64),
     #[error("Invalid signal id: {0:?}")]
     InvalidSignalId(FstSignalId),

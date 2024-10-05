@@ -4,16 +4,13 @@
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
 use crate::{
-    FstFileType, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
-    FstVarType, FstWriteError, Result,
+    FstFileType, FstScopeType, FstSignalId, FstSignalType, FstVarDirection, FstVarType,
+    FstWriteError, Result,
 };
 use std::io::{Seek, SeekFrom, Write};
 
 #[inline]
-pub(crate) fn write_variant_u64(
-    output: &mut impl Write,
-    mut value: u64,
-) -> Result<usize> {
+pub(crate) fn write_variant_u64(output: &mut impl Write, mut value: u64) -> Result<usize> {
     // often, the value is small
     if value <= 0x7f {
         let byte = [value as u8; 1];
@@ -29,6 +26,33 @@ pub(crate) fn write_variant_u64(
         value = next_value;
     }
     assert!(bytes.len() <= 10);
+    output.write_all(&bytes)?;
+    Ok(bytes.len())
+}
+
+#[inline]
+pub(crate) fn write_variant_i64(output: &mut impl Write, mut value: i64) -> WriteResult<usize> {
+    // often, the value is small
+    if value <= 63 && value >= -64 {
+        let byte = [value as u8 & 0x7f; 1];
+        output.write_all(&byte)?;
+        return Ok(1);
+    }
+
+    // calculate the number of bits we need to represent
+    let bits = if value >= 0 {
+        64 - value.leading_zeros() + 1
+    } else {
+        64 - value.leading_ones() + 1
+    };
+    let num_bytes = bits.div_ceil(7) as usize;
+
+    let mut bytes = Vec::with_capacity(num_bytes);
+    for ii in 0..num_bytes {
+        let mark = if ii == num_bytes - 1 { 0 } else { 0x80 };
+        bytes.push((value & 0x7f) as u8 | mark);
+        value >>= 7;
+    }
     output.write_all(&bytes)?;
     Ok(bytes.len())
 }
@@ -68,11 +92,7 @@ fn write_c_str(output: &mut impl Write, value: impl AsRef<str>) -> Result<()> {
 }
 
 #[inline]
-fn write_c_str_fixed_length(
-    output: &mut impl Write,
-    value: &str,
-    max_len: usize,
-) -> Result<()> {
+fn write_c_str_fixed_length(output: &mut impl Write, value: &str, max_len: usize) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.len() >= max_len {
         return Err(FstWriteError::StringTooLong(max_len, value.to_string()));
@@ -129,10 +149,7 @@ pub(crate) struct Header {
     pub(crate) time_zero: u64,
 }
 
-pub(crate) fn write_header(
-    output: &mut impl Write,
-    header: &Header,
-) -> Result<()> {
+pub(crate) fn write_header(output: &mut impl Write, header: &Header) -> Result<()> {
     write_u8(output, BlockType::Header as u8)?;
     write_u64(output, HEADER_LENGTH)?;
     write_u64(output, header.start_time)?;
@@ -160,10 +177,7 @@ const HIERARCHY_TPE_VCD_ATTRIBUTE_END: u8 = 253;
 const HIERARCHY_NAME_MAX_SIZE: usize = 512;
 const HIERARCHY_ATTRIBUTE_MAX_SIZE: usize = 65536 + 4096;
 
-pub(crate) fn write_hierarchy_bytes(
-    output: &mut (impl Write + Seek),
-    bytes: &[u8],
-) -> Result<()> {
+pub(crate) fn write_hierarchy_bytes(output: &mut (impl Write + Seek), bytes: &[u8]) -> Result<()> {
     write_u8(output, BlockType::HierarchyLZ4 as u8)?;
     // remember start to fix the section length afterward
     let start = output.stream_position()?;
@@ -309,10 +323,7 @@ const VALUE_CHANGE_PACK_TYPE_LZ4: u8 = b'4';
 
 /// Writes out the offsets for each signal value stream in the "alias 2" encoding.
 /// The original FST source code calls this data structure a "chain table"
-fn write_offset_table(
-    output: &mut (impl Write + Seek),
-    offsets: &[u64],
-) -> Result<()> {
+fn write_offset_table(output: &mut (impl Write + Seek), offsets: &[u64]) -> Result<()> {
     let mut zero_count = 0;
     for offset in offsets {
         if *offset == 0 {
@@ -332,10 +343,7 @@ fn write_offset_table(
 }
 
 #[inline]
-fn flush_zeros(
-    output: &mut (impl Write + Seek),
-    zeros: &mut u32,
-) -> Result<()> {
+fn flush_zeros(output: &mut (impl Write + Seek), zeros: &mut u32) -> Result<()> {
     if *zeros > 0 {
         // shifted by one because bit0 indicates whether we are dealing with a zero or a real offset
         let value = *zeros << 1;
