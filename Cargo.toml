@@ -20,3 +20,4 @@ twox-hash = { version = "1.6.3", default-features = false }
 
 [dev-dependencies]
 fst-native = "0.8.1"
+proptest = "1.5.0"

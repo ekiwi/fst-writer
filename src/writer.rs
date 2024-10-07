@@ -8,7 +8,8 @@ use crate::io::{
     write_hierarchy_up_scope, write_hierarchy_var, Header,
 };
 use crate::{
-    FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection, FstVarType, Result,
+    FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
+    FstVarType, Result,
 };
 
 pub fn open_fst<P: AsRef<std::path::Path>>(
@@ -27,7 +28,10 @@ pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
 }
 
 impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
-    fn open<P: AsRef<std::path::Path>>(path: P, info: &FstInfo) -> Result<Self> {
+    fn open<P: AsRef<std::path::Path>>(
+        path: P,
+        info: &FstInfo,
+    ) -> Result<Self> {
         let f = std::fs::File::create(path)?;
         let mut out = std::io::BufWriter::new(f);
         write_header_meta_data(&mut out, info)?;
@@ -64,7 +68,14 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         dir: FstVarDirection,
         alias: Option<FstSignalId>,
     ) -> Result<FstSignalId> {
-        write_hierarchy_var(&mut self.hierarchy_buf, tpe, dir, name, signal_tpe, alias)?;
+        write_hierarchy_var(
+            &mut self.hierarchy_buf,
+            tpe,
+            dir,
+            name,
+            signal_tpe,
+            alias,
+        )?;
         if let Some(alias) = alias {
             debug_assert!(alias.to_index() <= self.signals.len() as u32);
             Ok(alias)
@@ -101,7 +112,11 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.time_change(&mut self.out, time)
     }
 
-    pub fn signal_change(&mut self, signal_id: FstSignalId, value: &[u8]) -> Result<()> {
+    pub fn signal_change(
+        &mut self,
+        signal_id: FstSignalId,
+        value: &[u8],
+    ) -> Result<()> {
         self.buffer.signal_change(signal_id, value)
     }
 

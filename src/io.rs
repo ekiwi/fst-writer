@@ -3,14 +3,18 @@
 // released under BSD 3-Clause License
 // author: Kevin Laeufer <laeufer@cornell.edu>
 
+use crate::FstWriteError::InvalidCharacter;
 use crate::{
-    FstFileType, FstScopeType, FstSignalId, FstSignalType, FstVarDirection, FstVarType,
-    FstWriteError, Result,
+    FstFileType, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
+    FstVarType, FstWriteError, Result,
 };
 use std::io::{Seek, SeekFrom, Write};
 
 #[inline]
-pub(crate) fn write_variant_u64(output: &mut impl Write, mut value: u64) -> Result<usize> {
+pub(crate) fn write_variant_u64(
+    output: &mut impl Write,
+    mut value: u64,
+) -> Result<usize> {
     // often, the value is small
     if value <= 0x7f {
         let byte = [value as u8; 1];
@@ -31,7 +35,10 @@ pub(crate) fn write_variant_u64(output: &mut impl Write, mut value: u64) -> Resu
 }
 
 #[inline]
-pub(crate) fn write_variant_i64(output: &mut impl Write, mut value: i64) -> WriteResult<usize> {
+pub(crate) fn write_variant_i64(
+    output: &mut impl Write,
+    mut value: i64,
+) -> Result<usize> {
     // often, the value is small
     if value <= 63 && value >= -64 {
         let byte = [value as u8 & 0x7f; 1];
@@ -92,7 +99,11 @@ fn write_c_str(output: &mut impl Write, value: impl AsRef<str>) -> Result<()> {
 }
 
 #[inline]
-fn write_c_str_fixed_length(output: &mut impl Write, value: &str, max_len: usize) -> Result<()> {
+fn write_c_str_fixed_length(
+    output: &mut impl Write,
+    value: &str,
+    max_len: usize,
+) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.len() >= max_len {
         return Err(FstWriteError::StringTooLong(max_len, value.to_string()));
@@ -149,7 +160,10 @@ pub(crate) struct Header {
     pub(crate) time_zero: u64,
 }
 
-pub(crate) fn write_header(output: &mut impl Write, header: &Header) -> Result<()> {
+pub(crate) fn write_header(
+    output: &mut impl Write,
+    header: &Header,
+) -> Result<()> {
     write_u8(output, BlockType::Header as u8)?;
     write_u64(output, HEADER_LENGTH)?;
     write_u64(output, header.start_time)?;
@@ -177,7 +191,10 @@ const HIERARCHY_TPE_VCD_ATTRIBUTE_END: u8 = 253;
 const HIERARCHY_NAME_MAX_SIZE: usize = 512;
 const HIERARCHY_ATTRIBUTE_MAX_SIZE: usize = 65536 + 4096;
 
-pub(crate) fn write_hierarchy_bytes(output: &mut (impl Write + Seek), bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_hierarchy_bytes(
+    output: &mut (impl Write + Seek),
+    bytes: &[u8],
+) -> Result<()> {
     write_u8(output, BlockType::HierarchyLZ4 as u8)?;
     // remember start to fix the section length afterward
     let start = output.stream_position()?;
@@ -279,6 +296,95 @@ pub(crate) fn write_geometry(
 //////////////// Value Change Data
 
 #[inline]
+pub(crate) fn write_one_bit_signal(
+    output: &mut impl Write,
+    time_delta: u64,
+    value: u8,
+) -> Result<()> {
+    let vli = match value {
+        b'0' | b'1' => {
+            let bit = value - b'0';
+            // 2-bits are used to encode the signal value
+            let shift_count = 2;
+            (time_delta << shift_count) | ((bit as u64) << 1)
+        }
+        _ => {
+            if let Some(encoding) = encode_9_value(value) {
+                // 4-bits are used to encode the signal value
+                let shift_count = 4;
+                (time_delta << shift_count) | ((encoding as u64) << 1) | 1
+            } else {
+                return Err(InvalidCharacter(value as char));
+            }
+        }
+    };
+    write_variant_u64(output, vli)?;
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn write_multi_bit_signal(
+    output: &mut impl Write,
+    time_delta: u64,
+    values: &[u8],
+) -> Result<()> {
+    let is_digital = is_digital(values);
+    // write time delta
+    write_variant_u64(output, (time_delta << 1) | (!is_digital as u64))?;
+    // digital signals get a special encoding
+    if is_digital {
+        let mut wip_byte = 0u8;
+        for (ii, value) in values.iter().enumerate() {
+            let bit = *value - b'0';
+            let bit_id = 7 - (ii & 0x7);
+            wip_byte |= bit << bit_id;
+            if bit_id == 0 {
+                write_u8(output, wip_byte)?;
+                wip_byte = 0;
+            }
+        }
+        if values.len() % 8 != 0 {
+            write_u8(output, wip_byte)?;
+        }
+    } else {
+        output.write_all(values)?;
+    }
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn write_real_signal(
+    output: &mut impl Write,
+    time_delta: u64,
+    value: f64,
+) -> Result<()> {
+    // write time delta, bit 0 should always be zero, otherwise we are triggering the "rare packed case"
+    write_variant_u64(output, time_delta << 1)?;
+    output.write_all(value.to_le_bytes().as_slice())?;
+    Ok(())
+}
+
+#[inline]
+fn is_digital(values: &[u8]) -> bool {
+    values.iter().all(|v| matches!(*v, b'0' | b'1'))
+}
+
+#[inline]
+fn encode_9_value(value: u8) -> Option<u8> {
+    match value {
+        b'x' | b'X' => Some(0),
+        b'z' | b'Z' => Some(1),
+        b'h' | b'H' => Some(2),
+        b'u' | b'U' => Some(3),
+        b'w' | b'W' => Some(4),
+        b'l' | b'L' => Some(5),
+        b'-' => Some(6),
+        b'?' => Some(7),
+        _ => None,
+    }
+}
+
+#[inline]
 pub(crate) fn write_time_chain_update(
     output: &mut impl Write,
     prev_time: u64,
@@ -323,7 +429,10 @@ const VALUE_CHANGE_PACK_TYPE_LZ4: u8 = b'4';
 
 /// Writes out the offsets for each signal value stream in the "alias 2" encoding.
 /// The original FST source code calls this data structure a "chain table"
-fn write_offset_table(output: &mut (impl Write + Seek), offsets: &[u64]) -> Result<()> {
+fn write_offset_table(
+    output: &mut (impl Write + Seek),
+    offsets: &[u64],
+) -> Result<()> {
     let mut zero_count = 0;
     for offset in offsets {
         if *offset == 0 {
@@ -343,7 +452,10 @@ fn write_offset_table(output: &mut (impl Write + Seek), offsets: &[u64]) -> Resu
 }
 
 #[inline]
-fn flush_zeros(output: &mut (impl Write + Seek), zeros: &mut u32) -> Result<()> {
+fn flush_zeros(
+    output: &mut (impl Write + Seek),
+    zeros: &mut u32,
+) -> Result<()> {
     if *zeros > 0 {
         // shifted by one because bit0 indicates whether we are dealing with a zero or a real offset
         let value = *zeros << 1;
@@ -363,6 +475,7 @@ pub(crate) fn write_value_changes(
     write_u8(output, VALUE_CHANGE_PACK_TYPE_LZ4)?;
 
     // write "chain table", i.e. the data structure that tells us where each signal starts
+    todo!()
 }
 
 pub(crate) fn write_value_change_section(
