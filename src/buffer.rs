@@ -4,8 +4,7 @@
 
 use crate::io::{
     write_multi_bit_signal, write_one_bit_signal, write_time_chain_update,
-    write_u32, write_value_change_section, write_value_change_section_start,
-    write_variant_u64,
+    write_value_change_section, write_variant_u64,
 };
 use crate::{FstSignalId, FstSignalType, FstWriteError, Result};
 use std::borrow::Cow;
@@ -16,12 +15,20 @@ use std::io::{Seek, Write};
 pub(crate) struct SignalBuffer {
     start_time: u64,
     end_time: u64,
+    /// constant signal meta-data
     signals: Vec<SignalInfo>,
+    /// time table index of the previous change for each signal
+    prev_time_table_index: Vec<u32>,
+    /// values for all signals in the first time step of this block
+    frame: Vec<u8>,
+    /// copy of the frame with all value changes applied
     values: Vec<u8>,
-    value_changes: Vec<u8>,
+    value_changes: SingleVecLists,
     /// contains the delta encoded and compressed timetable
     time_table: Vec<u8>,
     time_table_index: u32,
+    /// keep a vec allocation around for encoding signals
+    write_buf: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,10 +37,6 @@ struct SignalInfo {
     len: u32,
     /// starting offset in the value buffer
     offset: u32,
-    /// time table index of the previous change
-    prev_time_table_index: u32,
-    /// pointer to the last value update
-    back_pointer: u32,
 }
 
 fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
@@ -43,8 +46,6 @@ fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
         out.push(SignalInfo {
             len: signal.len(),
             offset,
-            prev_time_table_index: 0,
-            back_pointer: 0,
         });
         offset += signal.len();
     }
@@ -56,26 +57,27 @@ impl SignalBuffer {
         signals: &[FstSignalType],
         start_time: u64,
     ) -> Result<Self> {
-        let mut time_table = Vec::with_capacity(16);
-        write_time_chain_update(&mut time_table, 0, start_time)?;
+        let time_table = Vec::with_capacity(16);
         let (signals, values_len) = gen_signal_info(signals);
+        let value_changes = SingleVecLists::new(signals.len());
         let values = vec![b'x'; values_len];
+        let prev_time_table_index = vec![0; signals.len()];
         Ok(Self {
             start_time,
             end_time: start_time,
             signals,
+            prev_time_table_index,
+            // the frame is initially empty until we complete the first time step
+            frame: vec![],
             values,
-            value_changes: vec![],
+            value_changes,
             time_table,
             time_table_index: 0,
+            write_buf: vec![],
         })
     }
 
-    pub(crate) fn time_change(
-        &mut self,
-        output: &mut (impl Write + Seek),
-        new_time: u64,
-    ) -> Result<()> {
+    pub(crate) fn time_change(&mut self, new_time: u64) -> Result<()> {
         match new_time.cmp(&self.end_time) {
             Ordering::Less => {
                 Err(FstWriteError::TimeDecrease(self.end_time, new_time))
@@ -84,17 +86,15 @@ impl SignalBuffer {
             Ordering::Greater => {
                 let first_time_step = self.time_table.is_empty();
 
+                // write timetable in compressed format
                 write_time_chain_update(
                     &mut self.time_table,
                     self.end_time,
                     new_time,
                 )?;
                 if first_time_step {
-                    write_value_change_section_start(
-                        output,
-                        &self.values,
-                        (self.signals.len() + 1) as u32,
-                    )?;
+                    // at the end of the first step, we copy values over into the frame
+                    self.frame = self.values.clone();
                 } else {
                     self.time_table_index += 1;
                 }
@@ -109,7 +109,7 @@ impl SignalBuffer {
         signal_id: FstSignalId,
         value: &[u8],
     ) -> Result<()> {
-        let info = match self.signals.get_mut(signal_id.to_array_index()) {
+        let info = match self.signals.get(signal_id.to_array_index()) {
             Some(info) => info,
             None => return Err(FstWriteError::InvalidSignalId(signal_id)),
         };
@@ -141,26 +141,31 @@ impl SignalBuffer {
             }
             self.values[range].copy_from_slice(value);
             // write down value change
-            let start = self.value_changes.len();
-            write_u32(&mut self.value_changes, info.back_pointer)?;
-            let time_table_idx_delta =
-                (self.time_table_index - info.prev_time_table_index) as u64;
+            let time_table_idx_delta = (self.time_table_index
+                - self.prev_time_table_index[signal_id.to_array_index()])
+                as u64;
+            self.write_buf.clear();
             match value {
                 [value] => write_one_bit_signal(
-                    &mut self.value_changes,
+                    &mut self.write_buf,
                     time_table_idx_delta,
                     *value,
                 )?,
                 values => write_multi_bit_signal(
-                    &mut self.value_changes,
+                    &mut self.write_buf,
                     time_table_idx_delta,
                     values,
                 )?,
             }
+            self.value_changes.append(
+                signal_id.to_array_index(),
+                &self.write_buf,
+                None,
+            );
 
-            // update info
-            info.prev_time_table_index = self.time_table_index;
-            info.back_pointer = start as u32;
+            // remember previous time-table index
+            self.prev_time_table_index[signal_id.to_array_index()] =
+                self.time_table_index;
         }
         Ok(())
     }
@@ -173,8 +178,13 @@ impl SignalBuffer {
             output,
             self.start_time,
             self.end_time,
+            &self.frame,
             &mut self.time_table,
             self.time_table_index as u64 + 1, // zero based index
+            |signal_idx: usize| {
+                self.value_changes.extract_list(signal_idx, None)
+            },
+            self.signals.len(),
         )?;
 
         // TODO: recycle?
@@ -247,7 +257,7 @@ impl ValueLists for SingleVecLists {
             vec![]
         } else {
             // find the first entry and calculate length
-            let (first, len) = self.list_start_and_len(list_id, fixed_size);
+            let len = self.list_len(list_id, fixed_size);
             let mut out = vec![0; len];
             let mut remaining_len = len;
             match fixed_size {
@@ -291,33 +301,25 @@ impl SingleVecLists {
         )
     }
 
-    /// Iterates from the back of the list to find the offset of the first element and
-    /// the total size of all elements and
-    fn list_start_and_len(
-        &self,
-        list_id: usize,
-        fixed_size: Option<usize>,
-    ) -> (usize, usize) {
+    /// Iterates from the back of the list to find the total size of all elements.
+    fn list_len(&self, list_id: usize, fixed_size: Option<usize>) -> usize {
         let mut last = self.lists_last[list_id];
         if last == 0 {
-            return (0, 0);
+            return 0;
         }
         let mut total_len = 0;
-        let mut first_entry = 0;
         match fixed_size {
             Some(len) => {
                 while last > 0 {
                     let start = last as usize - 1;
                     last = self.read_back_pointer(start);
                     total_len += len;
-                    first_entry = start;
                 }
             }
             None => {
                 while last > 0 {
                     let start = last as usize - 1;
                     last = self.read_back_pointer(start);
-                    first_entry = start;
                     let (len, _) =
                         read_variant_u64(self.data[start + 4..].as_ref());
                     total_len += len as usize;
@@ -325,7 +327,7 @@ impl SingleVecLists {
             }
         }
 
-        (first_entry, total_len)
+        total_len
     }
 }
 

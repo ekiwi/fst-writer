@@ -71,13 +71,6 @@ pub(crate) fn write_u64(output: &mut impl Write, value: u64) -> Result<()> {
     Ok(())
 }
 
-#[inline]
-pub(crate) fn write_u32(output: &mut impl Write, value: u32) -> Result<()> {
-    let buf = value.to_be_bytes();
-    output.write_all(&buf)?;
-    Ok(())
-}
-
 fn write_u8(output: &mut impl Write, value: u8) -> Result<()> {
     let buf = value.to_be_bytes();
     output.write_all(&buf)?;
@@ -131,16 +124,9 @@ const DOUBLE_ENDIAN_TEST: f64 = std::f64::consts::E;
 #[derive(Debug, PartialEq)]
 enum BlockType {
     Header = 0,
-    VcData = 1,
-    Blackout = 2,
     Geometry = 3,
-    Hierarchy = 4,
-    VcDataDynamicAlias = 5,
     HierarchyLZ4 = 6,
-    HierarchyLZ4Duo = 7,
     VcDataDynamicAlias2 = 8,
-    GZipWrapper = 254,
-    Skip = 255,
 }
 
 //////////////// Header
@@ -186,10 +172,10 @@ pub(crate) fn write_header(
 
 const HIERARCHY_TPE_VCD_SCOPE: u8 = 254;
 const HIERARCHY_TPE_VCD_UP_SCOPE: u8 = 255;
-const HIERARCHY_TPE_VCD_ATTRIBUTE_BEGIN: u8 = 252;
-const HIERARCHY_TPE_VCD_ATTRIBUTE_END: u8 = 253;
+// const HIERARCHY_TPE_VCD_ATTRIBUTE_BEGIN: u8 = 252;
+// const HIERARCHY_TPE_VCD_ATTRIBUTE_END: u8 = 253;
 const HIERARCHY_NAME_MAX_SIZE: usize = 512;
-const HIERARCHY_ATTRIBUTE_MAX_SIZE: usize = 65536 + 4096;
+// const HIERARCHY_ATTRIBUTE_MAX_SIZE: usize = 65536 + 4096;
 
 pub(crate) fn write_hierarchy_bytes(
     output: &mut (impl Write + Seek),
@@ -396,66 +382,10 @@ pub(crate) fn write_time_chain_update(
     Ok(())
 }
 
-/// start the value change section once the frame is complete
-pub(crate) fn write_value_change_section_start(
-    output: &mut (impl Write + Seek),
-    frame_values: &[u8],
-    max_signal_id: u32,
-) -> Result<u64> {
-    write_u8(output, BlockType::VcData as u8)?;
-    // remember start to fix the section header
-    let start = output.stream_position()?;
-    write_u64(output, 0)?; // dummy section length
-    write_u64(output, 0)?; // dummy start time
-    write_u64(output, 0)?; // dummy end time
-
-    // TODO: what is this value?
-    write_u64(output, 0)?;
-
-    // write frame
-    let uncompressed_length = frame_values.len() as u64;
-    // we do not support gzip right now and frames cannot be lz4 compressed
-    let compressed_length = frame_values.len() as u64;
-    write_variant_u64(output, uncompressed_length)?;
-    write_variant_u64(output, compressed_length)?;
-    write_variant_u64(output, max_signal_id as u64)?;
-    output.write_all(frame_values)?;
-
-    // return section start
-    Ok(start)
-}
-
 const VALUE_CHANGE_PACK_TYPE_LZ4: u8 = b'4';
 
-/// Writes out the offsets for each signal value stream in the "alias 2" encoding.
-/// The original FST source code calls this data structure a "chain table"
-fn write_offset_table(
-    output: &mut (impl Write + Seek),
-    offsets: &[u64],
-) -> Result<()> {
-    let mut zero_count = 0;
-    for offset in offsets {
-        if *offset == 0 {
-            zero_count += 1;
-        } else {
-            // if there were any leading zeros, commit them to the output stream
-            flush_zeros(output, &mut zero_count)?;
-            // indicate that this is a real value and not just a sequence of zeros
-            write_u8(output, 1)?;
-
-            todo!("how does the actual encoding here work?");
-        }
-    }
-    flush_zeros(output, &mut zero_count)?;
-
-    Ok(())
-}
-
 #[inline]
-fn flush_zeros(
-    output: &mut (impl Write + Seek),
-    zeros: &mut u32,
-) -> Result<()> {
+fn flush_zeros(output: &mut impl Write, zeros: &mut u32) -> Result<()> {
     if *zeros > 0 {
         // shifted by one because bit0 indicates whether we are dealing with a zero or a real offset
         let value = *zeros << 1;
@@ -466,36 +396,106 @@ fn flush_zeros(
     Ok(())
 }
 
-pub(crate) fn write_value_changes(
+fn write_value_changes(
     output: &mut (impl Write + Seek),
-    max_signal_id: u32,
+    get_signal_data: impl Fn(usize) -> Vec<u8>,
+    num_signals: usize,
+    signal_offsets: &mut impl Write,
 ) -> Result<()> {
-    write_variant_u64(output, max_signal_id as u64)?;
+    write_variant_u64(output, num_signals as u64)?;
     // we always use lz4 for compression
     write_u8(output, VALUE_CHANGE_PACK_TYPE_LZ4)?;
 
-    // write "chain table", i.e. the data structure that tells us where each signal starts
-    todo!()
+    let mut zero_count = 0;
+    let mut prev_offset = output.stream_position()? - 1;
+
+    for signal_idx in 0..num_signals {
+        let data = get_signal_data(signal_idx);
+        if data.is_empty() {
+            zero_count += 1;
+        } else {
+            flush_zeros(signal_offsets, &mut zero_count)?;
+            let start = output.stream_position()?;
+
+            // TODO: dedup with hashmap
+
+            // try to compress the data
+            let compressed = lz4_flex::compress(&data);
+            if compressed.len() < data.len() {
+                // we use the compressed version
+                write_variant_u64(output, data.len() as u64)?;
+                output.write_all(&compressed)?;
+            } else {
+                // it is better not to compress the data
+                write_variant_u64(output, 0)?;
+                output.write_all(&data)?;
+            };
+
+            // write new incremental offset
+            let offset_delta = (start - prev_offset) as i64;
+            write_variant_i64(signal_offsets, (offset_delta << 1) | 1)?;
+            prev_offset = start;
+        }
+    }
+    flush_zeros(signal_offsets, &mut zero_count)?;
+    Ok(())
+}
+
+fn write_frame(
+    output: &mut impl Write,
+    frame: &[u8],
+    num_signals: usize,
+) -> Result<()> {
+    // we never compress the frame since we do not support zlib compression
+    write_variant_u64(output, frame.len() as u64)?;
+    write_variant_u64(output, frame.len() as u64)?;
+    write_variant_u64(output, num_signals as u64)?;
+    output.write_all(frame)?;
+    Ok(())
 }
 
 pub(crate) fn write_value_change_section(
     output: &mut (impl Write + Seek),
     start_time: u64,
     end_time: u64,
+    frame: &[u8],
     time_table: &[u8],
     time_table_entries: u64,
+    get_signal_data: impl Fn(usize) -> Vec<u8>,
+    num_signals: usize,
 ) -> Result<()> {
+    // section header
     write_u8(output, BlockType::VcDataDynamicAlias2 as u8)?;
     // remember start to fix the section header
     let start = output.stream_position()?;
     write_u64(output, 0)?; // dummy section length
     write_u64(output, start_time)?;
     write_u64(output, end_time)?;
+    // some other value, not sure what??
+    write_u64(output, 0)?;
 
-    // TODO: write actual data
+    // frame, i.e., the initial values
+    write_frame(output, frame, num_signals)?;
+
+    // value change data
+    let mut signal_offsets = vec![];
+    write_value_changes(
+        output,
+        get_signal_data,
+        num_signals,
+        &mut signal_offsets,
+    )?;
+
+    // offset table
+    println!("Offset table start @ {}", output.stream_position()?);
+    println!("Offset table len {}", signal_offsets.len());
+    output.write_all(&signal_offsets)?;
+    write_u64(output, signal_offsets.len() as u64)?;
 
     // time table at the end
+    println!("Time table start @ {}", output.stream_position()?);
     output.write_all(time_table)?;
+    println!("Time table meta data start @ {}", output.stream_position()?);
     // we never compress the time table, so compressed and uncompressed length are always the same
     write_u64(output, time_table.len() as u64)?;
     write_u64(output, time_table.len() as u64)?;

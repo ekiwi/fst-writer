@@ -109,7 +109,7 @@ pub struct FstBodyWriter<W: std::io::Write + std::io::Seek> {
 
 impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     pub fn time_change(&mut self, time: u64) -> Result<()> {
-        self.buffer.time_change(&mut self.out, time)
+        self.buffer.time_change(time)
     }
 
     pub fn signal_change(
@@ -157,5 +157,3 @@ fn write_header_meta_data<W: std::io::Write + std::io::Seek>(
     };
     write_header(out, &header)
 }
-
-pub struct FstHierarchyWriter {}
