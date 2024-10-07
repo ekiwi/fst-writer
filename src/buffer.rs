@@ -131,7 +131,7 @@ impl SignalBuffer {
         };
         let value = value_cow.as_ref();
         debug_assert_eq!(value.len(), len);
-        let first_time_step = self.time_table_index == 0;
+        let first_time_step = self.time_table.is_empty();
         if first_time_step {
             self.values[range].copy_from_slice(value);
         } else {

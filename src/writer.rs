@@ -123,7 +123,8 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     pub fn finish(mut self) -> Result<()> {
         // write value change section
         self.buffer.finish(&mut self.out)?;
-        // TODO: update header with final data
+
+        todo!("update header with final data!!!!");
         Ok(())
     }
 }
