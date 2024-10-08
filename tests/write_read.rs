@@ -6,7 +6,7 @@
 // (using fst-native as the backend)
 
 use fst_writer::*;
-use wellen::{GetItem, SignalRef};
+use wellen::{GetItem, SignalRef, Time};
 
 #[test]
 fn write_read_simple() {
@@ -98,4 +98,30 @@ fn write_read_simple() {
     let signal_a = wave.get_signal(a_ref).unwrap();
     assert_eq!(signal_a.get_first_time_idx(), Some(0));
     assert_eq!(signal_a.time_indices(), [0, 1, 2]);
+    assert_eq!(
+        signal_values_to_string(signal_a, wave.time_table()),
+        "(0: 0), (1: 1), (5: 0)"
+    );
+    let signal_b = wave.get_signal(b_ref).unwrap();
+    assert_eq!(
+        signal_values_to_string(signal_b, wave.time_table()),
+        "(0: xxxxxxxxxxxxxxxx), (1: 1010101010101010), (5: 101010xx10101010)"
+    );
+}
+
+use std::fmt::Write;
+fn signal_values_to_string(signal: &wellen::Signal, time_table: &[Time]) -> String {
+    let mut out = String::new();
+    for (time, value) in signal.iter_changes() {
+        write!(
+            out,
+            "({}: {}), ",
+            time_table[time as usize],
+            value.to_bit_string().unwrap()
+        )
+        .unwrap();
+    }
+    out.pop().unwrap();
+    out.pop().unwrap();
+    out
 }

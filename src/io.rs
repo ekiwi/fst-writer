@@ -5,16 +5,13 @@
 
 use crate::FstWriteError::InvalidCharacter;
 use crate::{
-    FstFileType, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
-    FstVarType, FstWriteError, Result,
+    FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection, FstVarType, FstWriteError,
+    Result,
 };
 use std::io::{Seek, SeekFrom, Write};
 
 #[inline]
-pub(crate) fn write_variant_u64(
-    output: &mut impl Write,
-    mut value: u64,
-) -> Result<usize> {
+pub(crate) fn write_variant_u64(output: &mut impl Write, mut value: u64) -> Result<usize> {
     // often, the value is small
     if value <= 0x7f {
         let byte = [value as u8; 1];
@@ -35,10 +32,7 @@ pub(crate) fn write_variant_u64(
 }
 
 #[inline]
-pub(crate) fn write_variant_i64(
-    output: &mut impl Write,
-    mut value: i64,
-) -> Result<usize> {
+pub(crate) fn write_variant_i64(output: &mut impl Write, mut value: i64) -> Result<usize> {
     // often, the value is small
     if value <= 63 && value >= -64 {
         let byte = [value as u8 & 0x7f; 1];
@@ -92,11 +86,7 @@ fn write_c_str(output: &mut impl Write, value: impl AsRef<str>) -> Result<()> {
 }
 
 #[inline]
-fn write_c_str_fixed_length(
-    output: &mut impl Write,
-    value: &str,
-    max_len: usize,
-) -> Result<()> {
+fn write_c_str_fixed_length(output: &mut impl Write, value: &str, max_len: usize) -> Result<()> {
     let bytes = value.as_bytes();
     if bytes.len() >= max_len {
         return Err(FstWriteError::StringTooLong(max_len, value.to_string()));
@@ -130,41 +120,58 @@ enum BlockType {
 }
 
 //////////////// Header
-#[derive(Debug, PartialEq)]
-pub(crate) struct Header {
-    pub(crate) start_time: u64,
-    pub(crate) end_time: u64,
-    pub(crate) memory_used_by_writer: u64,
-    pub(crate) scope_count: u64,
-    pub(crate) var_count: u64,
-    pub(crate) max_signal_id: u64, // aka maxhandle
-    pub(crate) vc_section_count: u64,
-    pub(crate) timescale_exponent: i8,
-    pub(crate) version: String,
-    pub(crate) date: String,
-    pub(crate) file_type: FstFileType,
-    pub(crate) time_zero: u64,
-}
+const HEADER_POS: u64 = 0;
 
-pub(crate) fn write_header(
-    output: &mut impl Write,
-    header: &Header,
+/// Writes the user supplied meta-data to the header. We will come back to the header later to
+/// fill in other data.
+pub(crate) fn write_header_meta_data(
+    output: &mut (impl Write + Seek),
+    info: &FstInfo,
 ) -> Result<()> {
+    debug_assert_eq!(
+        output.stream_position().unwrap(),
+        HEADER_POS,
+        "We expect the header to be written at position {HEADER_POS}"
+    );
     write_u8(output, BlockType::Header as u8)?;
     write_u64(output, HEADER_LENGTH)?;
-    write_u64(output, header.start_time)?;
-    write_u64(output, header.end_time)?;
+    write_u64(output, 0)?; // start time is always zero
+    write_u64(output, 0)?; // dummy end time
     write_f64(output, DOUBLE_ENDIAN_TEST)?;
-    write_u64(output, header.memory_used_by_writer)?;
-    write_u64(output, header.scope_count)?;
-    write_u64(output, header.var_count)?;
-    write_u64(output, header.max_signal_id)?;
-    write_u64(output, header.vc_section_count)?;
-    write_i8(output, header.timescale_exponent)?;
-    write_c_str_fixed_length(output, &header.version, HEADER_VERSION_MAX_LEN)?;
-    write_c_str_fixed_length(output, &header.date, HEADER_DATE_MAX_LEN)?;
-    write_u8(output, header.file_type as u8)?;
-    write_u64(output, header.time_zero)?;
+    write_u64(output, 0)?; // memory used by writer is always zero, we do not compute this
+    write_u64(output, 0)?; // dummy scope count
+    write_u64(output, 0)?; // dummy var count
+    write_u64(output, 0)?; // dummy num signals
+    write_u64(output, 0)?; // dummy num vc sections
+    write_i8(output, info.timescale_exponent)?;
+    write_c_str_fixed_length(output, &info.version, HEADER_VERSION_MAX_LEN)?;
+    write_c_str_fixed_length(output, &info.date, HEADER_DATE_MAX_LEN)?;
+    write_u8(output, info.file_type as u8)?;
+    write_u64(output, info.start_time)?; // offset?
+    Ok(())
+}
+
+pub(crate) struct HeaderFinishInfo {
+    pub(crate) end_time: u64,
+    pub(crate) scope_count: u64,
+    pub(crate) var_count: u64,
+    pub(crate) num_signals: u64,
+    pub(crate) num_value_change_sections: u64,
+}
+
+pub(crate) fn update_header(
+    output: &mut (impl Write + Seek),
+    info: &HeaderFinishInfo,
+) -> Result<()> {
+    // go to start of header + skip block type, length and start time
+    output.seek(SeekFrom::Start(HEADER_POS + 1 + 2 * 8))?;
+    write_u64(output, info.end_time)?;
+    // skip endian test + writer memory
+    output.seek(SeekFrom::Current(2 * 8))?;
+    write_u64(output, info.scope_count)?;
+    write_u64(output, info.var_count)?;
+    write_u64(output, info.num_signals)?;
+    write_u64(output, info.num_value_change_sections)?;
     Ok(())
 }
 
@@ -177,10 +184,7 @@ const HIERARCHY_TPE_VCD_UP_SCOPE: u8 = 255;
 const HIERARCHY_NAME_MAX_SIZE: usize = 512;
 // const HIERARCHY_ATTRIBUTE_MAX_SIZE: usize = 65536 + 4096;
 
-pub(crate) fn write_hierarchy_bytes(
-    output: &mut (impl Write + Seek),
-    bytes: &[u8],
-) -> Result<()> {
+pub(crate) fn write_hierarchy_bytes(output: &mut (impl Write + Seek), bytes: &[u8]) -> Result<()> {
     write_u8(output, BlockType::HierarchyLZ4 as u8)?;
     // remember start to fix the section length afterward
     let start = output.stream_position()?;
@@ -338,6 +342,7 @@ pub(crate) fn write_multi_bit_signal(
     Ok(())
 }
 
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn write_real_signal(
     output: &mut impl Write,
@@ -441,11 +446,7 @@ fn write_value_changes(
     Ok(())
 }
 
-fn write_frame(
-    output: &mut impl Write,
-    frame: &[u8],
-    num_signals: usize,
-) -> Result<()> {
+fn write_frame(output: &mut impl Write, frame: &[u8], num_signals: usize) -> Result<()> {
     // we never compress the frame since we do not support zlib compression
     write_variant_u64(output, frame.len() as u64)?;
     write_variant_u64(output, frame.len() as u64)?;
@@ -479,23 +480,14 @@ pub(crate) fn write_value_change_section(
 
     // value change data
     let mut signal_offsets = vec![];
-    write_value_changes(
-        output,
-        get_signal_data,
-        num_signals,
-        &mut signal_offsets,
-    )?;
+    write_value_changes(output, get_signal_data, num_signals, &mut signal_offsets)?;
 
     // offset table
-    println!("Offset table start @ {}", output.stream_position()?);
-    println!("Offset table len {}", signal_offsets.len());
     output.write_all(&signal_offsets)?;
     write_u64(output, signal_offsets.len() as u64)?;
 
     // time table at the end
-    println!("Time table start @ {}", output.stream_position()?);
     output.write_all(time_table)?;
-    println!("Time table meta data start @ {}", output.stream_position()?);
     // we never compress the time table, so compressed and uncompressed length are always the same
     write_u64(output, time_table.len() as u64)?;
     write_u64(output, time_table.len() as u64)?;

@@ -53,10 +53,7 @@ fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
 }
 
 impl SignalBuffer {
-    pub(crate) fn new(
-        signals: &[FstSignalType],
-        start_time: u64,
-    ) -> Result<Self> {
+    pub(crate) fn new(signals: &[FstSignalType], start_time: u64) -> Result<Self> {
         let time_table = Vec::with_capacity(16);
         let (signals, values_len) = gen_signal_info(signals);
         let value_changes = SingleVecLists::new(signals.len());
@@ -79,19 +76,13 @@ impl SignalBuffer {
 
     pub(crate) fn time_change(&mut self, new_time: u64) -> Result<()> {
         match new_time.cmp(&self.end_time) {
-            Ordering::Less => {
-                Err(FstWriteError::TimeDecrease(self.end_time, new_time))
-            }
+            Ordering::Less => Err(FstWriteError::TimeDecrease(self.end_time, new_time)),
             Ordering::Equal => Ok(()),
             Ordering::Greater => {
                 let first_time_step = self.time_table.is_empty();
 
                 // write timetable in compressed format
-                write_time_chain_update(
-                    &mut self.time_table,
-                    self.end_time,
-                    new_time,
-                )?;
+                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
                 if first_time_step {
                     // at the end of the first step, we copy values over into the frame
                     self.frame = self.values.clone();
@@ -104,11 +95,7 @@ impl SignalBuffer {
         }
     }
 
-    pub(crate) fn signal_change(
-        &mut self,
-        signal_id: FstSignalId,
-        value: &[u8],
-    ) -> Result<()> {
+    pub(crate) fn signal_change(&mut self, signal_id: FstSignalId, value: &[u8]) -> Result<()> {
         let info = match self.signals.get(signal_id.to_array_index()) {
             Some(info) => info,
             None => return Err(FstWriteError::InvalidSignalId(signal_id)),
@@ -146,34 +133,21 @@ impl SignalBuffer {
                 as u64;
             self.write_buf.clear();
             match value {
-                [value] => write_one_bit_signal(
-                    &mut self.write_buf,
-                    time_table_idx_delta,
-                    *value,
-                )?,
-                values => write_multi_bit_signal(
-                    &mut self.write_buf,
-                    time_table_idx_delta,
-                    values,
-                )?,
+                [value] => write_one_bit_signal(&mut self.write_buf, time_table_idx_delta, *value)?,
+                values => {
+                    write_multi_bit_signal(&mut self.write_buf, time_table_idx_delta, values)?
+                }
             }
-            self.value_changes.append(
-                signal_id.to_array_index(),
-                &self.write_buf,
-                None,
-            );
+            self.value_changes
+                .append(signal_id.to_array_index(), &self.write_buf, None);
 
             // remember previous time-table index
-            self.prev_time_table_index[signal_id.to_array_index()] =
-                self.time_table_index;
+            self.prev_time_table_index[signal_id.to_array_index()] = self.time_table_index;
         }
         Ok(())
     }
 
-    pub(crate) fn finish(
-        &mut self,
-        output: &mut (impl Write + Seek),
-    ) -> Result<()> {
+    pub(crate) fn finish(&mut self, output: &mut (impl Write + Seek)) -> Result<u64> {
         write_value_change_section(
             output,
             self.start_time,
@@ -181,14 +155,12 @@ impl SignalBuffer {
             &self.frame,
             &mut self.time_table,
             self.time_table_index as u64 + 1, // zero based index
-            |signal_idx: usize| {
-                self.value_changes.extract_list(signal_idx, None)
-            },
+            |signal_idx: usize| self.value_changes.extract_list(signal_idx, None),
             self.signals.len(),
         )?;
 
         // TODO: recycle?
-        Ok(())
+        Ok(self.end_time)
     }
 }
 
@@ -201,17 +173,8 @@ struct SingleVecLists {
 
 trait ValueLists {
     fn new(num_lists: usize) -> Self;
-    fn append(
-        &mut self,
-        list_id: usize,
-        data: &[u8],
-        fixed_size: Option<usize>,
-    );
-    fn extract_list(
-        &self,
-        list_id: usize,
-        fixed_size: Option<usize>,
-    ) -> Vec<u8>;
+    fn append(&mut self, list_id: usize, data: &[u8], fixed_size: Option<usize>);
+    fn extract_list(&self, list_id: usize, fixed_size: Option<usize>) -> Vec<u8>;
 }
 
 impl ValueLists for SingleVecLists {
@@ -221,12 +184,7 @@ impl ValueLists for SingleVecLists {
         Self { lists_last, data }
     }
 
-    fn append(
-        &mut self,
-        list_id: usize,
-        data: &[u8],
-        fixed_size: Option<usize>,
-    ) {
+    fn append(&mut self, list_id: usize, data: &[u8], fixed_size: Option<usize>) {
         let back_pointer = self.lists_last[list_id];
         // new "last" entry, we add 1 to distinguish an empty list
         self.lists_last[list_id] = self.data.len() as u32 + 1;
@@ -246,11 +204,7 @@ impl ValueLists for SingleVecLists {
         }
     }
 
-    fn extract_list(
-        &self,
-        list_id: usize,
-        fixed_size: Option<usize>,
-    ) -> Vec<u8> {
+    fn extract_list(&self, list_id: usize, fixed_size: Option<usize>) -> Vec<u8> {
         let mut last = self.lists_last[list_id];
         // no list entries
         if last == 0 {
@@ -268,22 +222,19 @@ impl ValueLists for SingleVecLists {
                         remaining_len -= len;
                         let start = start + 4; // skip back pointer
                         let src = &self.data[start..start + len];
-                        out[remaining_len..remaining_len + len]
-                            .copy_from_slice(src);
+                        out[remaining_len..remaining_len + len].copy_from_slice(src);
                     }
                 }
                 None => {
                     while last > 0 {
                         let start = last as usize - 1;
                         last = self.read_back_pointer(start);
-                        let (len, len_skip) =
-                            read_variant_u64(self.data[start + 4..].as_ref());
+                        let (len, len_skip) = read_variant_u64(self.data[start + 4..].as_ref());
                         let len = len as usize;
                         remaining_len -= len;
                         let start = start + 4 + len_skip; // skip back pointer and length
                         let src = &self.data[start..start + len];
-                        out[remaining_len..remaining_len + len]
-                            .copy_from_slice(src);
+                        out[remaining_len..remaining_len + len].copy_from_slice(src);
                     }
                 }
             }
@@ -296,9 +247,7 @@ impl ValueLists for SingleVecLists {
 impl SingleVecLists {
     #[inline]
     fn read_back_pointer(&self, start: usize) -> u32 {
-        u32::from_le_bytes(
-            self.data[start..start + 4].as_ref().try_into().unwrap(),
-        )
+        u32::from_le_bytes(self.data[start..start + 4].as_ref().try_into().unwrap())
     }
 
     /// Iterates from the back of the list to find the total size of all elements.
@@ -320,8 +269,7 @@ impl SingleVecLists {
                 while last > 0 {
                     let start = last as usize - 1;
                     last = self.read_back_pointer(start);
-                    let (len, _) =
-                        read_variant_u64(self.data[start + 4..].as_ref());
+                    let (len, _) = read_variant_u64(self.data[start + 4..].as_ref());
                     total_len += len as usize;
                 }
             }
@@ -344,20 +292,11 @@ impl ValueLists for MultiVecLists {
         Self { lists }
     }
 
-    fn append(
-        &mut self,
-        list_id: usize,
-        data: &[u8],
-        _fixed_size: Option<usize>,
-    ) {
+    fn append(&mut self, list_id: usize, data: &[u8], _fixed_size: Option<usize>) {
         self.lists[list_id].extend_from_slice(data);
     }
 
-    fn extract_list(
-        &self,
-        list_id: usize,
-        _fixed_size: Option<usize>,
-    ) -> Vec<u8> {
+    fn extract_list(&self, list_id: usize, _fixed_size: Option<usize>) -> Vec<u8> {
         self.lists[list_id].clone()
     }
 }

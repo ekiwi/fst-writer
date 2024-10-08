@@ -4,12 +4,11 @@
 
 use crate::buffer::SignalBuffer;
 use crate::io::{
-    write_geometry, write_header, write_hierarchy_bytes, write_hierarchy_scope,
-    write_hierarchy_up_scope, write_hierarchy_var, Header,
+    update_header, write_geometry, write_header_meta_data, write_hierarchy_bytes,
+    write_hierarchy_scope, write_hierarchy_up_scope, write_hierarchy_var, HeaderFinishInfo,
 };
 use crate::{
-    FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection,
-    FstVarType, Result,
+    FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection, FstVarType, Result,
 };
 
 pub fn open_fst<P: AsRef<std::path::Path>>(
@@ -25,13 +24,12 @@ pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
     hierarchy_buf: std::io::Cursor<Vec<u8>>,
     signals: Vec<FstSignalType>,
     scope_depth: u64,
+    var_count: u64,
+    scope_count: u64,
 }
 
 impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
-    fn open<P: AsRef<std::path::Path>>(
-        path: P,
-        info: &FstInfo,
-    ) -> Result<Self> {
+    fn open<P: AsRef<std::path::Path>>(path: P, info: &FstInfo) -> Result<Self> {
         let f = std::fs::File::create(path)?;
         let mut out = std::io::BufWriter::new(f);
         write_header_meta_data(&mut out, info)?;
@@ -40,6 +38,8 @@ impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
             hierarchy_buf: std::io::Cursor::new(Vec::new()),
             signals: vec![],
             scope_depth: 0,
+            var_count: 0,
+            scope_count: 0,
         })
     }
 }
@@ -52,6 +52,7 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         tpe: FstScopeType,
     ) -> Result<()> {
         self.scope_depth += 1;
+        self.scope_count += 1;
         write_hierarchy_scope(&mut self.hierarchy_buf, name, component, tpe)
     }
     pub fn up_scope(&mut self) -> Result<()> {
@@ -68,14 +69,8 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         dir: FstVarDirection,
         alias: Option<FstSignalId>,
     ) -> Result<FstSignalId> {
-        write_hierarchy_var(
-            &mut self.hierarchy_buf,
-            tpe,
-            dir,
-            name,
-            signal_tpe,
-            alias,
-        )?;
+        self.var_count += 1;
+        write_hierarchy_var(&mut self.hierarchy_buf, tpe, dir, name, signal_tpe, alias)?;
         if let Some(alias) = alias {
             debug_assert!(alias.to_index() <= self.signals.len() as u32);
             Ok(alias)
@@ -94,9 +89,17 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         write_hierarchy_bytes(&mut self.out, &self.hierarchy_buf.into_inner())?;
         write_geometry(&mut self.out, &self.signals)?;
         let buffer = SignalBuffer::new(&self.signals, 0)?;
+        let finish_info = HeaderFinishInfo {
+            end_time: 0, // currently unknown
+            scope_count: self.scope_count,
+            var_count: self.var_count,
+            num_signals: self.signals.len() as u64,
+            num_value_change_sections: 0, // currently unknown
+        };
         let next = FstBodyWriter {
             out: self.out,
             buffer,
+            finish_info,
         };
         Ok(next)
     }
@@ -105,6 +108,7 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
 pub struct FstBodyWriter<W: std::io::Write + std::io::Seek> {
     out: W,
     buffer: SignalBuffer,
+    finish_info: HeaderFinishInfo,
 }
 
 impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
@@ -112,49 +116,19 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.time_change(time)
     }
 
-    pub fn signal_change(
-        &mut self,
-        signal_id: FstSignalId,
-        value: &[u8],
-    ) -> Result<()> {
+    pub fn signal_change(&mut self, signal_id: FstSignalId, value: &[u8]) -> Result<()> {
         self.buffer.signal_change(signal_id, value)
     }
 
     pub fn finish(mut self) -> Result<()> {
         // write value change section
-        self.buffer.finish(&mut self.out)?;
+        let end_time = self.buffer.finish(&mut self.out)?;
 
-        todo!("update header with final data!!!!");
+        // update info
+        self.finish_info.num_value_change_sections = 1;
+        self.finish_info.end_time = end_time;
+        update_header(&mut self.out, &self.finish_info)?;
+
         Ok(())
     }
-}
-
-const HEADER_POS: u64 = 0;
-
-/// Writes the user supplied meta-data to the header. We will come back to the header later to
-/// fill in other data.
-fn write_header_meta_data<W: std::io::Write + std::io::Seek>(
-    out: &mut W,
-    info: &FstInfo,
-) -> Result<()> {
-    debug_assert_eq!(
-        out.stream_position().unwrap(),
-        HEADER_POS,
-        "We expect the header to be written at position {HEADER_POS}"
-    );
-    let header = Header {
-        start_time: info.start_time,
-        end_time: info.start_time,
-        memory_used_by_writer: 0,
-        scope_count: 0,
-        var_count: 0,
-        max_signal_id: 0,
-        vc_section_count: 0,
-        timescale_exponent: info.timescale_exponent,
-        version: info.version.clone(),
-        date: info.date.clone(),
-        file_type: info.file_type,
-        time_zero: 0,
-    };
-    write_header(out, &header)
 }
