@@ -480,7 +480,15 @@ pub(crate) fn write_value_change_section(
     write_u64(output, 0)?; // dummy section length
     write_u64(output, start_time)?;
     write_u64(output, end_time)?;
-    // some other value, not sure what??
+    // memory required for traversal in the reader
+    // the reader will add 66 for fastlz ...
+    // "amount of buffer memory required in reader for full vc traversal"
+    // called `unc_memreq` in the original fst writer code which is incremented by `wrlen`
+    // scratchpad = malloc(xc->vchg_siz);
+    // scratchpnt = scratchpad + xc->vchg_siz
+    // wrlen = scratchpad + xc->vchg_siz - scratchpnt;
+    //
+    println!("TODO: calculate memory requirement!");
     write_u64(output, 0)?;
 
     // frame, i.e., the initial values
