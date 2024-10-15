@@ -401,6 +401,9 @@ fn flush_zeros(output: &mut impl Write, zeros: &mut u32) -> Result<()> {
     Ok(())
 }
 
+/// For any signal change streams smaller than this size, we won't even attempt LZ4 compression
+const MIN_SIZE_TO_ATTEMPT_COMPRESSION: usize = 32;
+
 fn write_value_changes(
     output: &mut (impl Write + Seek),
     get_signal_data: impl Fn(usize) -> Vec<u8>,
@@ -423,18 +426,23 @@ fn write_value_changes(
             let start = output.stream_position()?;
 
             // TODO: dedup with hashmap
-
-            // try to compress the data
-            let compressed = lz4_flex::compress(&data);
-            if compressed.len() < data.len() {
-                // we use the compressed version
-                write_variant_u64(output, data.len() as u64)?;
-                output.write_all(&compressed)?;
-            } else {
+            if data.len() < MIN_SIZE_TO_ATTEMPT_COMPRESSION {
                 // it is better not to compress the data
                 write_variant_u64(output, 0)?;
                 output.write_all(&data)?;
-            };
+            } else {
+                // try to compress the data
+                let compressed = lz4_flex::compress(&data);
+                if compressed.len() < data.len() {
+                    // we use the compressed version
+                    write_variant_u64(output, data.len() as u64)?;
+                    output.write_all(&compressed)?;
+                } else {
+                    // it is better not to compress the data
+                    write_variant_u64(output, 0)?;
+                    output.write_all(&data)?;
+                };
+            }
 
             // write new incremental offset
             let offset_delta = (start - prev_offset) as i64;
