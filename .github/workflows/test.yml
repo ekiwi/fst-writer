@@ -17,7 +17,6 @@ jobs:
           - stable
           - beta
           - nightly
-
     steps:
       - name: Update Rust to ${{ matrix.toolchain }}
         run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
@@ -34,7 +33,6 @@ jobs:
       matrix:
         toolchain:
           - stable
-
     steps:
       - name: Update Rust to ${{ matrix.toolchain }}
         run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
@@ -44,10 +42,26 @@ jobs:
       - name: Convert a VCD
         run: cargo run --verbose --example 2fst -- test-inputs/SPI_Write.vcd SPI_Write.vcd.fst
 
+  lint:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain:
+          - stable
+    steps:
+      - name: Update Rust to ${{ matrix.toolchain }}
+        run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
+      - name: Install Clippy
+        run: rustup component add clippy
+      - uses: actions/checkout@v4
+      - name: Run Lint
+        run: RUSTFLAGS="-Dwarnings" cargo clippy
+
+
   semver:
     name: Check Semantic Versioning
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
       - uses: obi1kenobi/cargo-semver-checks-action@v2
