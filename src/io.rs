@@ -409,6 +409,7 @@ fn write_value_changes(
     get_signal_data: impl Fn(usize) -> Vec<u8>,
     num_signals: usize,
     signal_offsets: &mut impl Write,
+    memory_required: &mut u64,
 ) -> Result<()> {
     write_variant_u64(output, num_signals as u64)?;
     // we always use lz4 for compression
@@ -424,6 +425,7 @@ fn write_value_changes(
         } else {
             flush_zeros(signal_offsets, &mut zero_count)?;
             let start = output.stream_position()?;
+            *memory_required += data.len() as u64;
 
             // TODO: dedup with hashmap
             if data.len() < MIN_SIZE_TO_ATTEMPT_COMPRESSION {
@@ -463,6 +465,7 @@ fn write_frame(output: &mut impl Write, frame: &[u8], num_signals: usize) -> Res
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_value_change_section(
     output: &mut (impl Write + Seek),
     start_time: u64,
@@ -480,23 +483,21 @@ pub(crate) fn write_value_change_section(
     write_u64(output, 0)?; // dummy section length
     write_u64(output, start_time)?;
     write_u64(output, end_time)?;
-    // memory required for traversal in the reader
-    // the reader will add 66 for fastlz ...
-    // "amount of buffer memory required in reader for full vc traversal"
-    // called `unc_memreq` in the original fst writer code which is incremented by `wrlen`
-    // scratchpad = malloc(xc->vchg_siz);
-    // scratchpnt = scratchpad + xc->vchg_siz
-    // wrlen = scratchpad + xc->vchg_siz - scratchpnt;
-    //
-    println!("TODO: calculate memory requirement!");
-    write_u64(output, 0)?;
+    let mut memory_required = 0;
+    write_u64(output, memory_required)?;
 
     // frame, i.e., the initial values
     write_frame(output, frame, num_signals)?;
 
     // value change data
     let mut signal_offsets = vec![];
-    write_value_changes(output, get_signal_data, num_signals, &mut signal_offsets)?;
+    write_value_changes(
+        output,
+        get_signal_data,
+        num_signals,
+        &mut signal_offsets,
+        &mut memory_required,
+    )?;
 
     // offset table
     output.write_all(&signal_offsets)?;
@@ -509,11 +510,14 @@ pub(crate) fn write_value_change_section(
     write_u64(output, time_table.len() as u64)?;
     write_u64(output, time_table_entries)?;
 
-    // fix section length
+    // fix section length + memory requirement
     let end = output.stream_position()?;
     let section_len = end - start;
     output.seek(SeekFrom::Start(start))?;
     write_u64(output, section_len)?;
+    output.seek(SeekFrom::Current(2 * 8))?;
+    // the memory required for traversal is just the uncompressed length of all signals summed up
+    write_u64(output, memory_required)?;
     output.seek(SeekFrom::Start(end))?;
     Ok(())
 }

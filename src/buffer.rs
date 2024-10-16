@@ -153,7 +153,7 @@ impl SignalBuffer {
             self.start_time,
             self.end_time,
             &self.frame,
-            &mut self.time_table,
+            &self.time_table,
             self.time_table_index as u64 + 1, // zero based index
             |signal_idx: usize| self.value_changes.extract_list(signal_idx, None),
             self.signals.len(),
