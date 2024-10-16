@@ -191,7 +191,7 @@ fn write_var<W: std::io::Write + std::io::Seek>(
         VarType::StdULogicVector => todo!(),
     };
     let dir = match var.direction() {
-        VarDirection::Unknown => todo!(),
+        VarDirection::Unknown => FstVarDirection::Implicit,
         VarDirection::Implicit => FstVarDirection::Implicit,
         VarDirection::Input => FstVarDirection::Input,
         VarDirection::Output => FstVarDirection::Output,

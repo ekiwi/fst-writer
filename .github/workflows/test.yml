@@ -27,6 +27,23 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  examples:
+    name: Test Examples
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain:
+          - stable
+
+    steps:
+      - name: Update Rust to ${{ matrix.toolchain }}
+        run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --verbose --examples
+      - name: Convert a VCD
+        run: cargo run --verbose --example 2fst -- test-inputs/SPI_Write.vcd SPI_Write.vcd.fst
+
   semver:
     name: Check Semantic Versioning
     runs-on: ubuntu-latest
