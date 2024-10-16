@@ -47,6 +47,10 @@ fn main() {
     out.finish().expect("failed to finish writing the FST file");
 }
 
+/// Writes all value changes from the source file to the FST.
+/// Note this is not the most efficient way to do this!
+/// A faster version would write each signal directly to the FST instead
+/// of writing changes based on the time step.
 fn write_value_changes<W: std::io::Write + std::io::Seek>(
     wave: &simple::Waveform,
     out: &mut FstBodyWriter<W>,
