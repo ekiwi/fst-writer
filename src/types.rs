@@ -31,11 +31,11 @@ impl FstSignalId {
     }
 
     /// The raw value used in the FST file format.
-    pub(crate) fn to_index(&self) -> u32 {
+    pub(crate) fn to_index(self) -> u32 {
         self.0.get()
     }
 
-    pub(crate) fn to_array_index(&self) -> usize {
+    pub(crate) fn to_array_index(self) -> usize {
         self.0.get() as usize - 1
     }
 }
@@ -58,7 +58,7 @@ impl FstSignalType {
         Self(SignalType::Real)
     }
 
-    pub(crate) fn to_file_format(&self) -> u32 {
+    pub(crate) fn to_file_format(self) -> u32 {
         match self.0 {
             SignalType::BitVec(value) => match value.get() {
                 1 => u32::MAX,
