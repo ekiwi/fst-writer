@@ -19,6 +19,6 @@ thiserror = "1.0.64"
 twox-hash = { version = "1.6.3", default-features = false }
 
 [dev-dependencies]
-wellen = "0.11"
-proptest = "1.5.0"
+wellen = "0.12"
+proptest = "1.5"
 clap = { version = "4.5", features = ["derive"] }
