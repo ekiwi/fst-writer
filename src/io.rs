@@ -34,7 +34,7 @@ pub(crate) fn write_variant_u64(output: &mut impl Write, mut value: u64) -> Resu
 #[inline]
 pub(crate) fn write_variant_i64(output: &mut impl Write, mut value: i64) -> Result<usize> {
     // often, the value is small
-    if value <= 63 && value >= -64 {
+    if (-64..=63).contains(&value) {
         let byte = [value as u8 & 0x7f; 1];
         output.write_all(&byte)?;
         return Ok(1);

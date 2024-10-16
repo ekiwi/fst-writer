@@ -354,8 +354,8 @@ mod tests {
         // write data
         for (list_id, data) in data.iter() {
             let list_id = *list_id % num_lists;
-            dut.append(list_id, &data, None);
-            reference.append(list_id, &data, None);
+            dut.append(list_id, data, None);
+            reference.append(list_id, data, None);
         }
 
         // check results
@@ -377,8 +377,8 @@ mod tests {
         for (list_id, data) in list_data.iter().enumerate() {
             for entry in data.as_slice().chunks(len) {
                 if entry.len() == len {
-                    dut.append(list_id, &entry, Some(len));
-                    reference.append(list_id, &entry, Some(len));
+                    dut.append(list_id, entry, Some(len));
+                    reference.append(list_id, entry, Some(len));
                 }
             }
         }
