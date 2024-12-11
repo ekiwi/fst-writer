@@ -27,9 +27,27 @@ fn main() {
     let args = Args::parse();
 
     let mut wave = simple::read(args.input).expect("failed to read input");
+
+    let mut timescale_exponent = wave
+        .hierarchy()
+        .timescale()
+        .and_then(|x| x.unit.to_exponent())
+        .unwrap_or(0);
+    let mut factor = wave.hierarchy().timescale().map_or(1, |x| x.factor);
+
+    if factor == 0 {
+        println!("Error: timescale factor is zero, setting it to 1");
+        factor = 1;
+    }
+
+    while factor % 10 == 0 {
+        factor /= 10;
+        timescale_exponent += 1;
+    }
+
     let info = FstInfo {
         start_time: wave.time_table()[0],
-        timescale_exponent: 0, // TODO
+        timescale_exponent,
         version: wave.hierarchy().version().to_string(),
         date: wave.hierarchy().date().to_string(),
         file_type: FstFileType::Verilog, // TODO
@@ -43,7 +61,7 @@ fn main() {
     // load all signals into memory
     let all_signals: Vec<_> = signal_ref_map.keys().cloned().collect();
     wave.load_signals_multi_threaded(&all_signals);
-    write_value_changes(&wave, &mut out, &signal_ref_map);
+    write_value_changes(&wave, &mut out, &signal_ref_map, factor);
     out.finish().expect("failed to finish writing the FST file");
 }
 
@@ -55,13 +73,15 @@ fn write_value_changes<W: std::io::Write + std::io::Seek>(
     wave: &simple::Waveform,
     out: &mut FstBodyWriter<W>,
     signal_ref_map: &SignalRefMap,
+    factor: u32,
 ) {
     // sort signal ids in order to get a deterministic output
     let mut signal_ids: Vec<_> = signal_ref_map.iter().map(|(a, b)| (*a, *b)).collect();
     signal_ids.sort_by_key(|(wellen_id, _)| *wellen_id);
 
     for (time_idx, time) in wave.time_table().iter().enumerate() {
-        out.time_change(*time).expect("failed time change");
+        out.time_change(*time * factor as u64)
+            .expect("failed time change");
         for (wellen_ref, fst_id) in signal_ids.iter() {
             let signal = wave.get_signal(*wellen_ref).expect("failed to find signal");
             if let Some(offset) = signal.get_offset(time_idx as TimeTableIdx) {

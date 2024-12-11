@@ -16,6 +16,7 @@ pub enum FstFileType {
 pub struct FstInfo {
     pub start_time: u64,
     // TODO: better abstraction
+    /// All times in the file are stored in units of 10^timescale_exponent s.
     pub timescale_exponent: i8,
     pub version: String,
     pub date: String,
