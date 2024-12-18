@@ -504,11 +504,7 @@ pub(crate) fn write_value_change_section(
     write_u64(output, signal_offsets.len() as u64)?;
 
     // time table at the end
-    output.write_all(time_table)?;
-    // we never compress the time table, so compressed and uncompressed length are always the same
-    write_u64(output, time_table.len() as u64)?;
-    write_u64(output, time_table.len() as u64)?;
-    write_u64(output, time_table_entries)?;
+    write_time_table(output, time_table, time_table_entries)?;
 
     // fix section length + memory requirement
     let end = output.stream_position()?;
@@ -519,5 +515,31 @@ pub(crate) fn write_value_change_section(
     // the memory required for traversal is just the uncompressed length of all signals summed up
     write_u64(output, memory_required)?;
     output.seek(SeekFrom::Start(end))?;
+    Ok(())
+}
+
+/// by unscientific experiment, we observed that this level might be good enough :)
+const ZLIB_LEVEL: u8 = 3;
+
+fn write_time_table(
+    output: &mut (impl Write + Seek),
+    time_table: &[u8],
+    time_table_entries: u64,
+) -> Result<()> {
+    // zlib compress
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(time_table, ZLIB_LEVEL);
+
+    // is compression worth it?
+    if compressed.len() > time_table.len() {
+        // it is more space efficient to stick with the uncompressed version
+        output.write_all(time_table)?;
+        write_u64(output, time_table.len() as u64)?;
+        write_u64(output, time_table.len() as u64)?;
+    } else {
+        output.write_all(compressed.as_slice())?;
+        write_u64(output, time_table.len() as u64)?;
+        write_u64(output, compressed.len() as u64)?;
+    }
+    write_u64(output, time_table_entries)?;
     Ok(())
 }
