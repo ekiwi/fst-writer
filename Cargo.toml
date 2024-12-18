@@ -4,7 +4,7 @@
 
 [package]
 name = "fst-writer"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.73.0"
 authors = ["Kevin Laeufer <laeufer@cornell.edu>"]
@@ -14,11 +14,14 @@ license = "BSD-3-Clause"
 keywords = ["fst", "waveform", "wavedump"]
 
 [dependencies]
-lz4_flex = "0.11.3"
-thiserror = "1.0.64"
-twox-hash = { version = "1.6.3", default-features = false }
+lz4_flex = "0.11"
+thiserror = "2.0"
+# twox-hash = { version = "1.6.3", default-features = false }
 
 [dev-dependencies]
-wellen = "0.12"
-proptest = "1.5"
+wellen = "0.13"
+proptest = "1.6"
 clap = { version = "4.5", features = ["derive"] }
+
+[profile.release]
+debug = 1

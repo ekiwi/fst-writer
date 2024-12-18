@@ -79,28 +79,51 @@ fn write_value_changes<W: std::io::Write + std::io::Seek>(
     let mut signal_ids: Vec<_> = signal_ref_map.iter().map(|(a, b)| (*a, *b)).collect();
     signal_ids.sort_by_key(|(wellen_id, _)| *wellen_id);
 
+    // signal data iterators
+    let mut signals: Vec<_> = signal_ids
+        .iter()
+        .map(|(wellen_ref, _)| {
+            wave.get_signal(*wellen_ref)
+                .expect("failed to find signal")
+                .iter_changes()
+                .peekable()
+        })
+        .collect();
+
+    // extract out the fst ids for convenience
+    let fst_ids: Vec<_> = signal_ids.into_iter().map(|(_, fst_id)| fst_id).collect();
+
     for (time_idx, time) in wave.time_table().iter().enumerate() {
+        let time_idx = time_idx as TimeTableIdx;
         out.time_change(*time * factor as u64)
             .expect("failed time change");
-        for (wellen_ref, fst_id) in signal_ids.iter() {
-            let signal = wave.get_signal(*wellen_ref).expect("failed to find signal");
-            if let Some(offset) = signal.get_offset(time_idx as TimeTableIdx) {
-                if offset.time_match {
-                    for element in 0..offset.elements {
-                        let value = signal.get_value_at(&offset, element);
-                        if let Some(bit_str) = value.to_bit_string() {
-                            out.signal_change(*fst_id, bit_str.as_bytes())
-                                .expect("failed to write value change");
-                        } else if let SignalValue::Real(value) = value {
-                            todo!("deal with real value: {value}");
-                        } else {
-                            todo!("deal with var len string");
-                        }
-                    }
+        for (signal, fst_id) in signals.iter_mut().zip(fst_ids.iter()) {
+            // while there is a change at the current time step
+            while signal
+                .peek()
+                .map(|(change_idx, _)| *change_idx == time_idx)
+                .unwrap_or(false)
+            {
+                // consume change
+                let (_, value) = signal.next().unwrap();
+                if let Some(bit_str) = value.to_bit_string() {
+                    out.signal_change(*fst_id, bit_str.as_bytes())
+                        .expect("failed to write value change");
+                } else if let SignalValue::Real(value) = value {
+                    todo!("deal with real value: {value}");
+                } else {
+                    todo!("deal with var len string");
                 }
             }
         }
     }
+}
+
+struct SignalTracker {
+    /// the value of `time_indices[index]`, None if no more changes are available
+    next_change: Option<TimeTableIdx>,
+    /// index into the `time_indices` of the signal
+    index: u32,
 }
 
 type SignalRefMap = std::collections::HashMap<SignalRef, FstSignalId>;
