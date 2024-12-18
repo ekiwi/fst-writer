@@ -119,13 +119,6 @@ fn write_value_changes<W: std::io::Write + std::io::Seek>(
     }
 }
 
-struct SignalTracker {
-    /// the value of `time_indices[index]`, None if no more changes are available
-    next_change: Option<TimeTableIdx>,
-    /// index into the `time_indices` of the signal
-    index: u32,
-}
-
 type SignalRefMap = std::collections::HashMap<SignalRef, FstSignalId>;
 
 fn write_hierarchy<W: std::io::Write + std::io::Seek>(
