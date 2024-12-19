@@ -54,12 +54,12 @@ fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
 
 impl SignalBuffer {
     pub(crate) fn new(signals: &[FstSignalType]) -> Result<Self> {
-        let time_table = Vec::with_capacity(16);
         let (signals, values_len) = gen_signal_info(signals);
         let value_changes = SingleVecLists::new(signals.len());
         let values = vec![b'x'; values_len].into_boxed_slice();
         let frame = values.clone();
         let prev_time_table_index = vec![0; signals.len()].into_boxed_slice();
+        let time_table = Vec::with_capacity(16);
         Ok(Self {
             start_time: 0,
             end_time: 0,
@@ -80,17 +80,16 @@ impl SignalBuffer {
             Ordering::Equal => Ok(()),
             Ordering::Greater => {
                 let first_time_step = self.time_table.is_empty();
-                debug_assert!(self.start_time <= self.end_time);
-                // write timetable in compressed format
-                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
                 if first_time_step {
                     // at the end of the first step, we copy values over into the frame
                     self.frame = self.values.clone();
-                    // update start time in first time step
-                    self.start_time = new_time;
                 } else {
+                    // the first step is not captured in the time table, but instead in the start_time
                     self.time_table_index += 1;
                 }
+                debug_assert!(self.start_time <= self.end_time);
+                // write timetable in compressed format
+                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
                 self.end_time = new_time;
                 Ok(())
             }
