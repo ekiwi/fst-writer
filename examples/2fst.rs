@@ -23,6 +23,9 @@ struct Args {
     fst_file: std::path::PathBuf,
 }
 
+// write a value change block when we reach 128 MiB of in memory data
+const FLUSH_AT: usize = 128 * 1024 * 1024;
+
 fn main() {
     let args = Args::parse();
 
@@ -94,6 +97,9 @@ fn write_value_changes<W: std::io::Write + std::io::Seek>(
     let fst_ids: Vec<_> = signal_ids.into_iter().map(|(_, fst_id)| fst_id).collect();
 
     for (time_idx, time) in wave.time_table().iter().enumerate() {
+        if out.size() >= FLUSH_AT {
+            out.flush().expect("failed to flush buffer");
+        }
         let time_idx = time_idx as TimeTableIdx;
         out.time_change(*time * factor as u64)
             .expect("failed time change");

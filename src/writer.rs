@@ -88,7 +88,7 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         );
         write_hierarchy_bytes(&mut self.out, &self.hierarchy_buf.into_inner())?;
         write_geometry(&mut self.out, &self.signals)?;
-        let buffer = SignalBuffer::new(&self.signals, 0)?;
+        let buffer = SignalBuffer::new(&self.signals)?;
         let finish_info = HeaderFinishInfo {
             end_time: 0, // currently unknown
             scope_count: self.scope_count,
@@ -120,12 +120,24 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.signal_change(signal_id, value)
     }
 
+    /// flushes all value change data to disk
+    pub fn flush(&mut self) -> Result<()> {
+        self.buffer.flush(&mut self.out)?;
+        self.finish_info.num_value_change_sections += 1;
+        Ok(())
+    }
+
+    /// Returns the estimated size of all data structures that grow over time.
+    pub fn size(&self) -> usize {
+        self.buffer.size()
+    }
+
     pub fn finish(mut self) -> Result<()> {
         // write value change section
-        let end_time = self.buffer.finish(&mut self.out)?;
+        let end_time = self.buffer.flush(&mut self.out)?;
 
         // update info
-        self.finish_info.num_value_change_sections = 1;
+        self.finish_info.num_value_change_sections += 1;
         self.finish_info.end_time = end_time;
         update_header(&mut self.out, &self.finish_info)?;
 

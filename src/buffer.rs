@@ -18,11 +18,11 @@ pub(crate) struct SignalBuffer {
     /// constant signal meta-data
     signals: Vec<SignalInfo>,
     /// time table index of the previous change for each signal
-    prev_time_table_index: Vec<u32>,
+    prev_time_table_index: Box<[u32]>,
     /// values for all signals in the first time step of this block
-    frame: Vec<u8>,
+    frame: Box<[u8]>,
     /// copy of the frame with all value changes applied
-    values: Vec<u8>,
+    values: Box<[u8]>,
     value_changes: SingleVecLists,
     /// contains the delta encoded and compressed timetable
     time_table: Vec<u8>,
@@ -53,19 +53,19 @@ fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
 }
 
 impl SignalBuffer {
-    pub(crate) fn new(signals: &[FstSignalType], start_time: u64) -> Result<Self> {
+    pub(crate) fn new(signals: &[FstSignalType]) -> Result<Self> {
         let time_table = Vec::with_capacity(16);
         let (signals, values_len) = gen_signal_info(signals);
         let value_changes = SingleVecLists::new(signals.len());
-        let values = vec![b'x'; values_len];
-        let prev_time_table_index = vec![0; signals.len()];
+        let values = vec![b'x'; values_len].into_boxed_slice();
+        let frame = values.clone();
+        let prev_time_table_index = vec![0; signals.len()].into_boxed_slice();
         Ok(Self {
-            start_time,
-            end_time: start_time,
+            start_time: 0,
+            end_time: 0,
             signals,
             prev_time_table_index,
-            // the frame is initially empty until we complete the first time step
-            frame: vec![],
+            frame,
             values,
             value_changes,
             time_table,
@@ -80,12 +80,14 @@ impl SignalBuffer {
             Ordering::Equal => Ok(()),
             Ordering::Greater => {
                 let first_time_step = self.time_table.is_empty();
-
+                debug_assert!(self.start_time <= self.end_time);
                 // write timetable in compressed format
                 write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
                 if first_time_step {
                     // at the end of the first step, we copy values over into the frame
                     self.frame = self.values.clone();
+                    // update start time in first time step
+                    self.start_time = new_time;
                 } else {
                     self.time_table_index += 1;
                 }
@@ -147,7 +149,8 @@ impl SignalBuffer {
         Ok(())
     }
 
-    pub(crate) fn finish(&mut self, output: &mut (impl Write + Seek)) -> Result<u64> {
+    pub(crate) fn flush(&mut self, output: &mut (impl Write + Seek)) -> Result<u64> {
+        // write data
         write_value_change_section(
             output,
             self.start_time,
@@ -159,8 +162,23 @@ impl SignalBuffer {
             self.signals.len(),
         )?;
 
+        // reset data
+        self.time_table_index = 0;
+        for idx in self.prev_time_table_index.iter_mut() {
+            *idx = 0;
+        }
+        self.start_time = self.end_time;
+        self.time_table.clear();
+        self.write_buf.clear();
+        self.value_changes.clear();
+
         // TODO: recycle?
         Ok(self.end_time)
+    }
+
+    /// Returns the estimated size of all data structures that grow over time.
+    pub(crate) fn size(&self) -> usize {
+        self.time_table.len() + self.write_buf.len() + self.value_changes.size()
     }
 }
 
@@ -175,6 +193,8 @@ trait ValueLists {
     fn new(num_lists: usize) -> Self;
     fn append(&mut self, list_id: usize, data: &[u8], fixed_size: Option<usize>);
     fn extract_list(&self, list_id: usize, fixed_size: Option<usize>) -> Vec<u8>;
+    fn clear(&mut self);
+    fn size(&self) -> usize;
 }
 
 impl ValueLists for SingleVecLists {
@@ -242,6 +262,17 @@ impl ValueLists for SingleVecLists {
             out
         }
     }
+
+    fn clear(&mut self) {
+        for e in self.lists_last.iter_mut() {
+            *e = 0;
+        }
+        self.data.clear();
+    }
+
+    fn size(&self) -> usize {
+        self.lists_last.len() * std::mem::size_of::<u32>() + self.data.len()
+    }
 }
 
 impl SingleVecLists {
@@ -298,6 +329,17 @@ impl ValueLists for MultiVecLists {
 
     fn extract_list(&self, list_id: usize, _fixed_size: Option<usize>) -> Vec<u8> {
         self.lists[list_id].clone()
+    }
+
+    fn clear(&mut self) {
+        for list in self.lists.iter_mut() {
+            list.clear();
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.lists.len() * std::mem::size_of::<Vec<u8>>()
+            + self.lists.iter().map(|l| l.len()).sum::<usize>()
     }
 }
 
