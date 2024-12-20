@@ -65,6 +65,9 @@ fn write_read_simple() {
     writer.signal_change(a, b"0").unwrap();
     writer.signal_change(b, b"101010XX10101010").unwrap();
 
+    // flush the buffer, creating a new value change section
+    writer.flush().unwrap();
+
     writer.time_change(7).unwrap();
     writer.signal_change(a, b"X").unwrap();
     writer.signal_change(b, b"0").unwrap();

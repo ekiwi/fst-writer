@@ -88,8 +88,11 @@ impl SignalBuffer {
                     self.time_table_index += 1;
                 }
                 debug_assert!(self.start_time <= self.end_time);
+
+                // in the first step, the time needs to be written relative to 0
+                let delta_to = if first_time_step { 0 } else { self.end_time };
                 // write timetable in compressed format
-                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
+                write_time_chain_update(&mut self.time_table, delta_to, new_time)?;
                 self.end_time = new_time;
                 Ok(())
             }
