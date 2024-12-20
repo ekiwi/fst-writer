@@ -64,13 +64,18 @@ fn write_read_simple() {
     writer.time_change(5).unwrap();
     writer.signal_change(a, b"0").unwrap();
     writer.signal_change(b, b"101010XX10101010").unwrap();
+
+    writer.time_change(7).unwrap();
+    writer.signal_change(a, b"X").unwrap();
+    writer.signal_change(b, b"0").unwrap();
+
     writer.finish().unwrap();
 
     //// read
     let mut wave = wellen::simple::read(filename).unwrap();
 
     // timetable
-    assert_eq!(wave.time_table(), [0, 1, 5]);
+    assert_eq!(wave.time_table(), [0, 1, 5, 7]);
 
     // hierarchy
     assert_eq!(wave.hierarchy().date(), date);
@@ -97,15 +102,15 @@ fn write_read_simple() {
     wave.load_signals(&[a_ref, b_ref]);
     let signal_a = wave.get_signal(a_ref).unwrap();
     assert_eq!(signal_a.get_first_time_idx(), Some(0));
-    assert_eq!(signal_a.time_indices(), [0, 1, 2]);
+    assert_eq!(signal_a.time_indices(), [0, 1, 2, 3]);
     assert_eq!(
         signal_values_to_string(signal_a, wave.time_table()),
-        "(0: 0), (1: 1), (5: 0)"
+        "(0: 0), (1: 1), (5: 0), (7: x)"
     );
     let signal_b = wave.get_signal(b_ref).unwrap();
     assert_eq!(
         signal_values_to_string(signal_b, wave.time_table()),
-        "(0: xxxxxxxxxxxxxxxx), (1: 1010101010101010), (5: 101010xx10101010)"
+        "(0: xxxxxxxxxxxxxxxx), (1: 1010101010101010), (5: 101010xx10101010), (7: 0000000000000000)"
     );
 }
 

@@ -17,10 +17,9 @@ keywords = ["fst", "waveform", "wavedump"]
 lz4_flex = "0.11"
 miniz_oxide = "0.8.2"
 thiserror = "2.0"
-# twox-hash = { version = "1.6.3", default-features = false }
 
 [dev-dependencies]
-wellen = "0.13"
+wellen = "0.13.6"
 proptest = "1.6"
 clap = { version = "4.5", features = ["derive"] }
 
