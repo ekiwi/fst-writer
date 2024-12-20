@@ -29,6 +29,8 @@ pub(crate) struct SignalBuffer {
     time_table_index: u32,
     /// keep a vec allocation around for encoding signals
     write_buf: Vec<u8>,
+    /// is this the first buffer for the file that we are writing?
+    first_buffer: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +73,7 @@ impl SignalBuffer {
             time_table,
             time_table_index: 0,
             write_buf: vec![],
+            first_buffer: true,
         })
     }
 
@@ -123,9 +126,14 @@ impl SignalBuffer {
         let value = value_cow.as_ref();
         debug_assert_eq!(value.len(), len);
         let first_time_step = self.time_table.is_empty();
-        if first_time_step {
+        if first_time_step && self.first_buffer {
             self.values[range].copy_from_slice(value);
         } else {
+            if self.time_table.is_empty() {
+                // write_time_chain_update(&mut self.time_table, 0, self.end_time)?;
+                todo!("Currently we only support flushing right before a new time step.")
+            }
+
             // check to see if there actually was a change
             if &self.values[range.clone()] == value {
                 return Ok(());
@@ -173,6 +181,7 @@ impl SignalBuffer {
         self.time_table.clear();
         self.write_buf.clear();
         self.value_changes.clear();
+        self.first_buffer = false;
 
         // TODO: recycle?
         Ok(self.end_time)
