@@ -9,6 +9,42 @@ use fst_writer::*;
 use wellen::{GetItem, SignalRef, Time};
 
 #[test]
+fn write_read_empty() {
+    let filename = "tests/empty.fst";
+    let version = "test 0.2.3";
+    let date = "2034-10-10";
+
+    ///////// write
+    let info = FstInfo {
+        start_time: 0,
+        timescale_exponent: 0,
+        version: version.to_string(),
+        date: date.to_string(),
+        file_type: FstFileType::Verilog,
+    };
+    let mut writer = open_fst(filename, &info).unwrap();
+
+    let _var = writer
+        .var(
+            "a",
+            FstSignalType::bit_vec(1),
+            FstVarType::Logic,
+            FstVarDirection::Implicit,
+            None,
+        )
+        .unwrap();
+
+    let writer = writer.finish().unwrap();
+
+    // writer.time_change(0).unwrap();
+    // writer.signal_change(var, b"0").unwrap();
+
+    writer.finish().unwrap();
+
+    drop(wellen::simple::read(filename).unwrap());
+}
+
+#[test]
 fn write_read_simple() {
     let filename = "tests/simple.fst";
     let version = "test 0.2.3";
