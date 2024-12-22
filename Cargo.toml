@@ -2,6 +2,10 @@
 # released under BSD 3-Clause License
 # author: Kevin Laeufer <laeufer@cornell.edu>
 
+[workspace]
+
+members = ["fuzz"]
+
 [package]
 name = "fst-writer"
 version = "0.2.6"
