@@ -1,0 +1,24 @@
+[package]
+name = "fst-writer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+fstapi = "0.0.2"
+libfuzzer-sys = "0.4"
+tempfile = "3.14.0"
+wellen = "0.13.6"
+
+[dependencies.fst-writer]
+path = ".."
+
+[[bin]]
+name = "fstapi_diff"
+path = "fuzz_targets/fstapi_diff.rs"
+test = false
+doc = false
+bench = false
