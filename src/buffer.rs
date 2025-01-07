@@ -159,6 +159,14 @@ impl SignalBuffer {
         Ok(())
     }
 
+    fn num_time_table_entries(&self) -> u64 {
+        if self.time_table.is_empty() {
+            0
+        } else {
+            self.time_table_index as u64 + 1
+        }
+    }
+
     pub(crate) fn flush(&mut self, output: &mut (impl Write + Seek)) -> Result<u64> {
         // write data
         write_value_change_section(
@@ -167,7 +175,7 @@ impl SignalBuffer {
             self.end_time,
             &self.frame,
             &self.time_table,
-            self.time_table_index as u64 + 1, // zero based index
+            self.num_time_table_entries(),
             |signal_idx: usize| self.value_changes.extract_list(signal_idx, None),
             self.signals.len(),
         )?;

@@ -19,7 +19,7 @@ miniz_oxide = "0.8.2"
 thiserror = "2.0"
 
 [dev-dependencies]
-wellen = "0.13.6"
+wellen = "0.13.8"
 proptest = "1.6"
 clap = { version = "4.5", features = ["derive"] }
 
