@@ -277,7 +277,7 @@ pub(crate) fn write_geometry(
     output.seek(SeekFrom::Start(start))?;
     write_u64(output, section_len)?; // section length
     write_u64(output, section_len - 3 * 8)?; // uncompressed section _content_ length
-                                             // return cursor back to end
+    // return cursor back to end
     output.seek(SeekFrom::Start(end))?;
 
     Ok(())

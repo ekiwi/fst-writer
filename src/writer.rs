@@ -4,8 +4,8 @@
 
 use crate::buffer::SignalBuffer;
 use crate::io::{
-    update_header, write_geometry, write_header_meta_data, write_hierarchy_bytes,
-    write_hierarchy_scope, write_hierarchy_up_scope, write_hierarchy_var, HeaderFinishInfo,
+    HeaderFinishInfo, update_header, write_geometry, write_header_meta_data, write_hierarchy_bytes,
+    write_hierarchy_scope, write_hierarchy_up_scope, write_hierarchy_var,
 };
 use crate::{
     FstInfo, FstScopeType, FstSignalId, FstSignalType, FstVarDirection, FstVarType, Result,
