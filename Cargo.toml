@@ -1,12 +1,12 @@
-# Copyright 2024 Cornell University
+# Copyright 2024-2025 Cornell University
 # released under BSD 3-Clause License
 # author: Kevin Laeufer <laeufer@cornell.edu>
 
 [package]
 name = "fst-writer"
-version = "0.2.6"
-edition = "2021"
-rust-version = "1.73.0"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.85.0"
 authors = ["Kevin Laeufer <laeufer@cornell.edu>"]
 description = "A Rust library for writing waveform traces in the FST format."
 repository = "https://github.com/ekiwi/fst-writer"
