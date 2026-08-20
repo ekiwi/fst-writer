@@ -13,7 +13,12 @@ use std::io::{Seek, Write};
 
 /// keeps track of signal values before writing them to disk
 pub(crate) struct SignalBuffer {
+    /// start time step of the current block
+    ///
+    /// Equal to previous block end_time or equal to the timestamp of the first value change in the
+    /// initial block.
     start_time: u64,
+    /// last time step written
     end_time: u64,
     /// constant signal meta-data
     signal_info: Vec<SignalInfo>,
@@ -23,14 +28,20 @@ pub(crate) struct SignalBuffer {
     frame: Box<[u8]>,
     /// copy of the frame with all value changes applied
     values: Box<[u8]>,
+    /// contains the value changes
     value_changes: SingleVecLists,
-    /// contains the delta encoded and compressed timetable
+    /// contains the delta encoded and compressed time table
     time_table: Vec<u8>,
+    /// the index of the last time step written in [`Self::time_table`].
     time_table_index: u32,
     /// keep a vec allocation around for encoding signals
     write_buf: Vec<u8>,
     /// is this the first buffer for the file that we are writing?
     first_buffer: bool,
+    /// was a value written before the first time change?
+    signal_change_emitted: bool,
+    /// start time of the first value change section
+    first_time: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -83,32 +94,49 @@ impl SignalBuffer {
             time_table_index: 0,
             write_buf: vec![],
             first_buffer: true,
+            signal_change_emitted: false,
+            first_time: 0,
         })
     }
 
     pub(crate) fn time_change(&mut self, new_time: u64) -> Result<()> {
+        if self.is_initial_time() {
+            // If any signal change was already emitted, start time at 0.
+            self.start_time = if self.signal_change_emitted {
+                0
+            } else {
+                new_time
+            };
+            self.first_time = self.start_time;
+            self.start_time_step(new_time)?;
+            return Ok(());
+        }
+
         match new_time.cmp(&self.end_time) {
             Ordering::Less => Err(FstWriteError::TimeDecrease(self.end_time, new_time)),
             Ordering::Equal => Ok(()),
+            // the first step of a section is not captured in the time table index, but instead in
+            // the start_time
+            Ordering::Greater if self.time_table.is_empty() => self.start_time_step(new_time),
             Ordering::Greater => {
-                let first_time_step = self.time_table.is_empty();
-                if first_time_step {
-                    // at the end of the first step, we copy values over into the frame
-                    self.frame = self.values.clone();
-                } else {
-                    // the first step is not captured in the time table, but instead in the start_time
-                    self.time_table_index += 1;
-                }
-                debug_assert!(self.start_time <= self.end_time);
-
-                // in the first step, the time needs to be written relative to 0
-                let delta_to = if first_time_step { 0 } else { self.end_time };
+                self.time_table_index += 1;
                 // write timetable in compressed format
-                write_time_chain_update(&mut self.time_table, delta_to, new_time)?;
+                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
                 self.end_time = new_time;
                 Ok(())
             }
         }
+    }
+
+    /// Starts the first time step of a value change section: the values collected so far become
+    /// the frame and the time is written relative to 0.
+    fn start_time_step(&mut self, new_time: u64) -> Result<()> {
+        debug_assert!(self.time_table.is_empty());
+        debug_assert!(self.start_time <= new_time);
+        self.frame = self.values.clone();
+        write_time_chain_update(&mut self.time_table, 0, new_time)?;
+        self.end_time = new_time;
+        Ok(())
     }
 
     pub(crate) fn signal_change(&mut self, signal_id: FstSignalId, value: &[u8]) -> Result<()> {
@@ -134,12 +162,11 @@ impl SignalBuffer {
         };
         let value = value_cow.as_ref();
         debug_assert_eq!(value.len(), len);
-        let first_time_step = self.time_table.is_empty();
-        if first_time_step && self.first_buffer {
+        if self.is_initial_time() {
             self.values[range].copy_from_slice(value);
+            self.signal_change_emitted = true;
         } else {
             if self.time_table.is_empty() {
-                // write_time_chain_update(&mut self.time_table, 0, self.end_time)?;
                 todo!("Currently we only support flushing right before a new time step.")
             }
 
@@ -149,23 +176,69 @@ impl SignalBuffer {
             }
             self.values[range].copy_from_slice(value);
             // write down value change
-            let time_table_idx_delta = (self.time_table_index
-                - self.prev_time_table_index[signal_id.to_array_index()])
-                as u64;
-            self.write_buf.clear();
-            match value {
-                [value] => write_one_bit_signal(&mut self.write_buf, time_table_idx_delta, *value)?,
-                values => {
-                    write_multi_bit_signal(&mut self.write_buf, time_table_idx_delta, values)?
-                }
-            }
-            self.value_changes
-                .append(signal_id.to_array_index(), &self.write_buf, None);
-
-            // remember previous time-table index
-            self.prev_time_table_index[signal_id.to_array_index()] = self.time_table_index;
+            self.append_value_change(signal_id.to_array_index())?;
         }
         Ok(())
+    }
+
+    /// Writes down a value change for the current value of a signal in the current time step.
+    fn append_value_change(&mut self, signal_idx: usize) -> Result<()> {
+        let (offset, len) = {
+            let info = &self.signal_info[signal_idx];
+            (info.offset as usize, info.len as usize)
+        };
+        let time_table_idx_delta =
+            (self.time_table_index - self.prev_time_table_index[signal_idx]) as u64;
+        self.write_buf.clear();
+        match &self.values[offset..offset + len] {
+            [value] => write_one_bit_signal(&mut self.write_buf, time_table_idx_delta, *value)?,
+            values => write_multi_bit_signal(&mut self.write_buf, time_table_idx_delta, values)?,
+        }
+        self.value_changes.append(signal_idx, &self.write_buf, None);
+
+        // remember previous time-table index
+        self.prev_time_table_index[signal_idx] = self.time_table_index;
+        Ok(())
+    }
+
+    /// Returns true if the current section holds at least one value change.
+    pub(crate) fn has_value_changes(&self) -> bool {
+        !self.value_changes.is_empty()
+    }
+
+    /// Returns true if the first [`time_change`] has yet to be issued.
+    pub(crate) fn is_initial_time(&self) -> bool {
+        self.time_table.is_empty() && self.first_buffer
+    }
+
+    pub(crate) fn end_time(&self) -> u64 {
+        self.end_time
+    }
+
+    /// Mocks up a single time step at zero, containing the values of all signals.
+    ///
+    /// Used when the file is closed without the time ever advancing.
+    pub(crate) fn mock_initial_time_step(&mut self) -> Result<()> {
+        debug_assert!(self.is_initial_time(), "the time already advanced");
+        self.time_change(0)?;
+        self.clone_all_values()
+    }
+
+    /// Write down the current value of every signal as a value change in the current time step.
+    ///
+    /// Avoid losing signal changes made before the first time change. They are still stored in
+    /// [`Self::frame`], but the reader, in certain cases, do not read it, and only considers the
+    /// recorded value changes.
+    fn clone_all_values(&mut self) -> Result<()> {
+        for signal_idx in 0..self.signal_info.len() {
+            self.append_value_change(signal_idx)?;
+        }
+        Ok(())
+    }
+
+    /// Start time of the first value change section.
+    pub(crate) fn first_time(&self) -> u64 {
+        self.first_time
     }
 
     fn num_time_table_entries(&self) -> u64 {
@@ -304,6 +377,10 @@ impl ValueLists for SingleVecLists {
 }
 
 impl SingleVecLists {
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     #[inline]
     fn read_back_pointer(&self, start: usize) -> u32 {
         u32::from_le_bytes(self.data[start..start + 4].as_ref().try_into().unwrap())
