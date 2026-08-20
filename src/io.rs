@@ -135,7 +135,7 @@ pub(crate) fn write_header_meta_data(
     );
     write_u8(output, BlockType::Header as u8)?;
     write_u64(output, HEADER_LENGTH)?;
-    write_u64(output, 0)?; // start time is always zero
+    write_u64(output, 0)?; // dummy start time
     write_u64(output, 0)?; // dummy end time
     write_f64(output, DOUBLE_ENDIAN_TEST)?;
     write_u64(output, 0)?; // memory used by writer is always zero, we do not compute this
@@ -152,6 +152,7 @@ pub(crate) fn write_header_meta_data(
 }
 
 pub(crate) struct HeaderFinishInfo {
+    pub(crate) start_time: u64,
     pub(crate) end_time: u64,
     pub(crate) scope_count: u64,
     pub(crate) var_count: u64,
@@ -163,8 +164,9 @@ pub(crate) fn update_header(
     output: &mut (impl Write + Seek),
     info: &HeaderFinishInfo,
 ) -> Result<()> {
-    // go to start of header + skip block type, length and start time
-    output.seek(SeekFrom::Start(HEADER_POS + 1 + 2 * 8))?;
+    // go to start of header + skip block type and length
+    output.seek(SeekFrom::Start(HEADER_POS + 1 + 8))?;
+    write_u64(output, info.start_time)?;
     write_u64(output, info.end_time)?;
     // skip endian test + writer memory
     output.seek(SeekFrom::Current(2 * 8))?;
