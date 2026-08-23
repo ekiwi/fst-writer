@@ -6,7 +6,7 @@
 // (using fst-native as the backend)
 
 use fst_writer::*;
-use wellen::{GetItem, SignalRef, Time};
+use wellen::{SignalRef, Time};
 
 #[test]
 fn write_read_simple() {
@@ -90,7 +90,7 @@ fn write_read_simple() {
         let h = wave.hierarchy();
         let top = h.first_scope().unwrap();
         assert_eq!(top.full_name(h), "simple");
-        let vars = top.vars(h).map(|r| h.get(r)).collect::<Vec<_>>();
+        let vars = top.vars(h).map(|r| &h[r]).collect::<Vec<_>>();
         let var_names = vars.iter().map(|v| v.full_name(h)).collect::<Vec<_>>();
         assert_eq!(var_names, ["simple.a", "simple.b", "simple.a_alias"]);
         let signal_ids = vars

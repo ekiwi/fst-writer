@@ -103,7 +103,7 @@ fn write_value_changes<W: std::io::Write + std::io::Seek>(
         let time_idx = time_idx as TimeTableIdx;
         out.time_change(*time * factor as u64)
             .expect("failed time change");
-        for (signal, fst_id) in signals.iter_mut().zip(fst_ids.iter()) {
+        for (signal, &fst_id) in signals.iter_mut().zip(fst_ids.iter()) {
             // while there is a change at the current time step
             while signal
                 .peek()
@@ -112,13 +112,21 @@ fn write_value_changes<W: std::io::Write + std::io::Seek>(
             {
                 // consume change
                 let (_, value) = signal.next().unwrap();
-                if let Some(bit_str) = value.to_bit_string() {
-                    out.signal_change(*fst_id, bit_str.as_bytes())
-                        .expect("failed to write value change");
-                } else if let SignalValue::Real(value) = value {
-                    todo!("deal with real value: {value}");
-                } else {
-                    todo!("deal with var len string");
+                match value {
+                    SignalValueRef::Event => {
+                        out.signal_change(fst_id, &[])
+                            .expect("failed to write value change");
+                    }
+                    SignalValueRef::BitVec(bv) => {
+                        out.signal_change(fst_id, bv.bit_string().as_bytes())
+                            .expect("failed to write value change");
+                    }
+                    SignalValueRef::String(_value) => {
+                        todo!("deal with var len string");
+                    }
+                    SignalValueRef::Real(_value) => {
+                        todo!("deal with real value: {value}");
+                    }
                 }
             }
         }
@@ -134,8 +142,8 @@ fn write_hierarchy<W: std::io::Write + std::io::Seek>(
     let mut signal_ref_map = SignalRefMap::new();
     for item in hier.items() {
         match item {
-            HierarchyItem::Scope(scope) => write_scope(hier, out, &mut signal_ref_map, scope),
-            HierarchyItem::Var(var) => write_var(hier, out, &mut signal_ref_map, var),
+            ItemRef::Scope(scope) => write_scope(hier, out, &mut signal_ref_map, scope),
+            ItemRef::Var(var) => write_var(hier, out, &mut signal_ref_map, var),
         }
     }
     signal_ref_map
@@ -145,8 +153,9 @@ fn write_scope<W: std::io::Write + std::io::Seek>(
     hier: &Hierarchy,
     out: &mut FstHeaderWriter<W>,
     signal_ref_map: &mut SignalRefMap,
-    scope: &Scope,
+    scope: ScopeRef,
 ) {
+    let scope = &hier[scope];
     let name = scope.name(hier);
     let component = scope.component(hier).unwrap_or("");
     let tpe = match scope.scope_type() {
@@ -174,14 +183,15 @@ fn write_scope<W: std::io::Write + std::io::Seek>(
         ScopeType::VhdlPackage => todo!(),
         ScopeType::GhwGeneric => todo!(),
         ScopeType::VhdlArray => todo!(),
+        _ => todo!(),
     };
     out.scope(name, component, tpe)
         .expect("failed to write scope");
 
     for item in scope.items(hier) {
         match item {
-            HierarchyItem::Scope(scope) => write_scope(hier, out, signal_ref_map, scope),
-            HierarchyItem::Var(var) => write_var(hier, out, signal_ref_map, var),
+            ItemRef::Scope(scope) => write_scope(hier, out, signal_ref_map, scope),
+            ItemRef::Var(var) => write_var(hier, out, signal_ref_map, var),
         }
     }
     out.up_scope().expect("failed to close scope");
@@ -191,13 +201,14 @@ fn write_var<W: std::io::Write + std::io::Seek>(
     hier: &Hierarchy,
     out: &mut FstHeaderWriter<W>,
     signal_ref_map: &mut SignalRefMap,
-    var: &Var,
+    var: VarRef,
 ) {
+    let var = &hier[var];
     let name = var.name(hier);
-    let signal_tpe = match var.signal_encoding() {
+    let signal_tpe = match var.signal_encoding(hier) {
         SignalEncoding::String => todo!("support varlen!"),
         SignalEncoding::Real => FstSignalType::real(),
-        SignalEncoding::BitVector(len) => FstSignalType::bit_vec(len.get()),
+        SignalEncoding::BitVector(len) => FstSignalType::bit_vec(len),
     };
     let tpe = match var.var_type() {
         VarType::Event => FstVarType::Event,
@@ -235,6 +246,8 @@ fn write_var<W: std::io::Write + std::io::Seek>(
         VarType::StdLogicVector => todo!(),
         VarType::StdULogic => todo!(),
         VarType::StdULogicVector => todo!(),
+        VarType::RealParameter => todo!(),
+        VarType::EventParameter => todo!(),
     };
     let dir = match var.direction() {
         VarDirection::Unknown => FstVarDirection::Implicit,
