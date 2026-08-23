@@ -859,3 +859,74 @@ fn write_read_value_after_flush() {
     );
     assert_eq!(read(filename), read(reference_filename));
 }
+
+/// A `time_change` that does not advance the clock is still a time step: the reference never
+/// compares the new time to the current one, it writes the zero delta and counts the step like any
+/// other. So the repeated time stamp gets its own time table entry, and the value changes on either
+/// side of it stay on separate steps.
+#[test]
+fn write_read_time_change_without_progress() {
+    let filename = "tests/time_change_without_progress.fst";
+    let reference_filename = "tests/time_change_without_progress_fstapi.fst";
+    let info = FstInfo {
+        start_time: 0,
+        timescale_exponent: -9,
+        version: "test 0.2.3".to_string(),
+        date: "2034-10-10".to_string(),
+        file_type: FstFileType::Verilog,
+    };
+    let mut writer = open_fst(filename, &info).unwrap();
+    let a = writer
+        .var(
+            "a",
+            FstSignalType::bit_vec(1),
+            FstVarType::Reg,
+            FstVarDirection::Output,
+            None,
+        )
+        .unwrap();
+    let mut writer = writer.finish().unwrap();
+    writer.time_change(10).unwrap();
+    writer.signal_change(a, b"1").unwrap();
+    // does not advance the clock, but still counts as a step
+    writer.time_change(10).unwrap();
+    writer.signal_change(a, b"0").unwrap();
+    writer.time_change(20).unwrap();
+    writer.signal_change(a, b"1").unwrap();
+    writer.finish().unwrap();
+
+    //// the same history through the reference writer
+    let mut reference = fstapi::Writer::create(reference_filename, true)
+        .unwrap()
+        .timescale_from_str("1ns")
+        .unwrap();
+    let ref_a = reference
+        .create_var(
+            fstapi::var_type::VCD_REG,
+            fstapi::var_dir::OUTPUT,
+            1,
+            "a",
+            None,
+        )
+        .unwrap();
+    for (time, value) in [(10u64, b"1"), (10, b"0"), (20, b"1")] {
+        reference.emit_time_change(time).unwrap();
+        reference.emit_value_change(ref_a, value).unwrap();
+    }
+    drop(reference);
+
+    //// read
+    assert_eq!(read_time_table(filename), [10, 10, 20]);
+    assert_eq!(
+        read_time_table(filename),
+        read_time_table(reference_filename),
+        "the repeated time stamp has to be recorded, exactly as the reference records it"
+    );
+}
+
+/// The raw time table of a file, without the deduplication `wellen` applies on read.
+fn read_time_table(filename: &str) -> Vec<u64> {
+    let input = std::io::BufReader::new(std::fs::File::open(filename).unwrap());
+    let reader = fst_reader::FstReader::open_and_read_time_table(input).unwrap();
+    reader.get_time_table().unwrap_or_default().to_vec()
+}

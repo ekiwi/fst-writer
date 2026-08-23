@@ -22,6 +22,8 @@ thiserror = "2.0"
 wellen = "0.25.6"
 # used to read back our files with the reference implementation
 fstapi = "0.0.3"
+# used to read the raw time table, which wellen deduplicates
+fst-reader = "0.17.0"
 proptest = "1.11"
 clap = { version = "4.6", features = ["derive"] }
 

@@ -8,7 +8,6 @@ use crate::io::{
 };
 use crate::{FstSignalId, FstSignalType, FstWriteError, Result};
 use std::borrow::Cow;
-use std::cmp::Ordering;
 use std::io::{Seek, Write};
 
 /// keeps track of signal values before writing them to disk
@@ -119,17 +118,15 @@ impl SignalBuffer {
         // initial time step in the time table.
         debug_assert!(!self.time_table.is_empty());
 
-        match new_time.cmp(&self.end_time) {
-            Ordering::Less => Err(FstWriteError::TimeDecrease(self.end_time, new_time)),
-            Ordering::Equal => Ok(()),
-            Ordering::Greater => {
-                self.time_table_index += 1;
-                // write timetable in compressed format
-                write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
-                self.end_time = new_time;
-                Ok(())
-            }
+        if new_time < self.end_time {
+            return Err(FstWriteError::TimeDecrease(self.end_time, new_time));
         }
+
+        self.time_table_index += 1;
+        // write time table in compressed format
+        write_time_chain_update(&mut self.time_table, self.end_time, new_time)?;
+        self.end_time = new_time;
+        Ok(())
     }
 
     /// Starts the first time step of a value change section: the values collected so far become
