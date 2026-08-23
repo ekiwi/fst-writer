@@ -9,6 +9,8 @@
 
 use clap::Parser;
 use fst_writer::*;
+use std::fs::File;
+use std::io::BufWriter;
 use wellen::*;
 
 #[derive(Parser, Debug)]
@@ -28,8 +30,59 @@ const FLUSH_AT: usize = 128 * 1024 * 1024;
 
 fn main() {
     let args = Args::parse();
+    let (mut out, signal_ref_map) = write_header(args.input.clone(), args.fst_file);
+    let load_opts = LoadOptions::default();
 
-    let mut wave = simple::read(args.input).expect("failed to read input");
+    // stream all signals into the output fst
+    let mut wave = stream::read_from_file(args.input, &load_opts)
+        .expect("failed to read input in streaming mode");
+    let filter = stream::Filter::all();
+    let mut prev_time: Option<Time> = None;
+    wave.stream_changes::<()>(filter, |time, signal, value| {
+        // emit time change
+        if prev_time.is_none_or(|prev| prev < time) {
+            out.time_change(time).expect("failed time change");
+            prev_time = Some(time);
+        }
+
+        // emit change
+        let fst_id = signal_ref_map[&signal];
+        match value {
+            SignalValueRef::Event => {
+                out.signal_change(fst_id, &[])
+                    .expect("failed to write value change");
+            }
+            SignalValueRef::BitVec(bv) => {
+                out.signal_change(fst_id, bv.bit_string().as_bytes())
+                    .expect("failed to write value change");
+            }
+            SignalValueRef::String(_value) => {
+                todo!("deal with var len string");
+            }
+            SignalValueRef::Real(_value) => {
+                todo!("deal with real value: {value}");
+            }
+        }
+
+        // flush buffer
+        if out.size() >= FLUSH_AT {
+            out.flush().expect("failed to flush buffer");
+        }
+
+        Ok(())
+    })
+    .expect("failed to parse signal changes");
+
+    out.finish().expect("failed to finish writing the FST file");
+}
+
+fn write_header<P: AsRef<std::path::Path>>(
+    filename: P,
+    fst_file: impl AsRef<std::path::Path>,
+) -> (FstBodyWriter<BufWriter<File>>, SignalRefMap) {
+    // TODO: once wellen supports start/end time access in streaming mode, it will be enough to open
+    //       the file just once!
+    let wave = simple::read(filename).expect("failed to read input");
 
     let mut timescale_exponent = wave
         .hierarchy()
@@ -55,82 +108,12 @@ fn main() {
         date: wave.hierarchy().date().to_string(),
         file_type: FstFileType::Verilog, // TODO
     };
-    let mut out = open_fst(args.fst_file, &info).expect("failed to open output");
+    let mut out = open_fst(fst_file, &info).expect("failed to open output");
     let signal_ref_map = write_hierarchy(wave.hierarchy(), &mut out);
-    let mut out = out
+    let out = out
         .finish()
         .expect("failed to write FST header or hierarchy");
-
-    // load all signals into memory
-    let all_signals: Vec<_> = signal_ref_map.keys().cloned().collect();
-    wave.load_signals_multi_threaded(&all_signals);
-    write_value_changes(&wave, &mut out, &signal_ref_map, factor);
-    out.finish().expect("failed to finish writing the FST file");
-}
-
-/// Writes all value changes from the source file to the FST.
-/// Note this is not the most efficient way to do this!
-/// A faster version would write each signal directly to the FST instead
-/// of writing changes based on the time step.
-fn write_value_changes<W: std::io::Write + std::io::Seek>(
-    wave: &simple::Waveform,
-    out: &mut FstBodyWriter<W>,
-    signal_ref_map: &SignalRefMap,
-    factor: u32,
-) {
-    // sort signal ids in order to get a deterministic output
-    let mut signal_ids: Vec<_> = signal_ref_map.iter().map(|(a, b)| (*a, *b)).collect();
-    signal_ids.sort_by_key(|(wellen_id, _)| *wellen_id);
-
-    // signal data iterators
-    let mut signals: Vec<_> = signal_ids
-        .iter()
-        .map(|(wellen_ref, _)| {
-            wave.get_signal(*wellen_ref)
-                .expect("failed to find signal")
-                .iter_changes()
-                .peekable()
-        })
-        .collect();
-
-    // extract out the fst ids for convenience
-    let fst_ids: Vec<_> = signal_ids.into_iter().map(|(_, fst_id)| fst_id).collect();
-
-    for (time_idx, time) in wave.time_table().iter().enumerate() {
-        if out.size() >= FLUSH_AT {
-            out.flush().expect("failed to flush buffer");
-        }
-        let time_idx = time_idx as TimeTableIdx;
-        out.time_change(*time * factor as u64)
-            .expect("failed time change");
-        for (signal, &fst_id) in signals.iter_mut().zip(fst_ids.iter()) {
-            // while there is a change at the current time step
-            while signal
-                .peek()
-                .map(|(change_idx, _)| *change_idx == time_idx)
-                .unwrap_or(false)
-            {
-                // consume change
-                let (_, value) = signal.next().unwrap();
-                match value {
-                    SignalValueRef::Event => {
-                        out.signal_change(fst_id, &[])
-                            .expect("failed to write value change");
-                    }
-                    SignalValueRef::BitVec(bv) => {
-                        out.signal_change(fst_id, bv.bit_string().as_bytes())
-                            .expect("failed to write value change");
-                    }
-                    SignalValueRef::String(_value) => {
-                        todo!("deal with var len string");
-                    }
-                    SignalValueRef::Real(_value) => {
-                        todo!("deal with real value: {value}");
-                    }
-                }
-            }
-        }
-    }
+    (out, signal_ref_map)
 }
 
 type SignalRefMap = std::collections::HashMap<SignalRef, FstSignalId>;
