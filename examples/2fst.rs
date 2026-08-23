@@ -23,6 +23,10 @@ struct Args {
     input: std::path::PathBuf,
     #[arg(value_name = "FSTFILE", index = 2)]
     fst_file: std::path::PathBuf,
+    #[arg(long, help = "")]
+    start_time: Option<String>,
+    #[arg(long, help = "")]
+    end_time: Option<String>,
 }
 
 // write a value change block when we reach 128 MiB of in memory data
@@ -30,43 +34,54 @@ const FLUSH_AT: usize = 128 * 1024 * 1024;
 
 fn main() {
     let args = Args::parse();
-    let (mut out, signal_ref_map) = write_header(args.input.clone(), args.fst_file);
+    let start_time = args.start_time.as_ref().map(|s| parse_time(&s));
+    let end_time = args.end_time.as_ref().map(|s| parse_time(&s));
+    let (mut out, signal_ref_map, filter_start, filter_end) =
+        write_header(args.input.clone(), args.fst_file, start_time, end_time);
     let load_opts = LoadOptions::default();
 
     // stream all signals into the output fst
     let mut wave = stream::read_from_file(args.input, &load_opts)
         .expect("failed to read input in streaming mode");
-    let filter = stream::Filter::all();
+
+    // apply time filters
+    let mut filter = stream::Filter::all();
+    filter.start = filter_start;
+    filter.end = Some(filter_end);
     let mut prev_time: Option<Time> = None;
     wave.stream_changes::<()>(filter, |time, signal, value| {
-        // emit time change
-        if prev_time.is_none_or(|prev| prev < time) {
-            out.time_change(time).expect("failed time change");
-            prev_time = Some(time);
-        }
+        // we need to manually filter time in order to work around a bug in wellen:
+        // https://github.com/ekiwi/wellen/issues/141
+        if time >= filter_start && time <= filter_end {
+            // emit time change
+            if prev_time.is_none_or(|prev| prev < time) {
+                out.time_change(time).expect("failed time change");
+                prev_time = Some(time);
+            }
 
-        // emit change
-        let fst_id = signal_ref_map[&signal];
-        match value {
-            SignalValueRef::Event => {
-                out.signal_change(fst_id, &[])
-                    .expect("failed to write value change");
+            // emit change
+            let fst_id = signal_ref_map[&signal];
+            match value {
+                SignalValueRef::Event => {
+                    out.signal_change(fst_id, &[])
+                        .expect("failed to write value change");
+                }
+                SignalValueRef::BitVec(bv) => {
+                    out.signal_change(fst_id, bv.bit_string().as_bytes())
+                        .expect("failed to write value change");
+                }
+                SignalValueRef::String(_value) => {
+                    todo!("deal with var len string");
+                }
+                SignalValueRef::Real(_value) => {
+                    todo!("deal with real value: {value}");
+                }
             }
-            SignalValueRef::BitVec(bv) => {
-                out.signal_change(fst_id, bv.bit_string().as_bytes())
-                    .expect("failed to write value change");
-            }
-            SignalValueRef::String(_value) => {
-                todo!("deal with var len string");
-            }
-            SignalValueRef::Real(_value) => {
-                todo!("deal with real value: {value}");
-            }
-        }
 
-        // flush buffer
-        if out.size() >= FLUSH_AT {
-            out.flush().expect("failed to flush buffer");
+            // flush buffer
+            if out.size() >= FLUSH_AT {
+                out.flush().expect("failed to flush buffer");
+            }
         }
 
         Ok(())
@@ -76,20 +91,77 @@ fn main() {
     out.finish().expect("failed to finish writing the FST file");
 }
 
-fn write_header<P: AsRef<std::path::Path>>(
-    filename: P,
-    fst_file: impl AsRef<std::path::Path>,
-) -> (FstBodyWriter<BufWriter<File>>, SignalRefMap) {
-    // TODO: once wellen supports start/end time access in streaming mode, it will be enough to open
-    //       the file just once!
-    let wave = simple::read(filename).expect("failed to read input");
+#[derive(Debug, Copy, Clone)]
+struct TimeWithUnit {
+    time: u64,
+    unit: TimescaleUnit,
+}
 
-    let mut timescale_exponent = wave
-        .hierarchy()
-        .timescale()
-        .and_then(|x| x.unit.to_exponent())
-        .unwrap_or(0);
-    let mut factor = wave.hierarchy().timescale().map_or(1, |x| x.factor);
+fn parse_time(value: &str) -> TimeWithUnit {
+    if let Some(time) = value.strip_suffix("zs") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::ZeptoSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("as") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::AttoSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("fs") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::FemtoSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("ps") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::PicoSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("ns") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::NanoSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("us") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::MicroSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("ms") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::MilliSeconds,
+        }
+    } else if let Some(time) = value.strip_suffix("s") {
+        TimeWithUnit {
+            time: time.trim().parse().unwrap(),
+            unit: TimescaleUnit::Seconds,
+        }
+    } else {
+        panic!("Cannot parse time `{value}`. A valid time unit is required.")
+    }
+}
+
+impl TimeWithUnit {
+    fn as_time(&self, mut timescale_exponent: i8) -> Time {
+        let mut time = self.time as Time;
+        timescale_exponent = self.unit.to_exponent().unwrap_or(0) - timescale_exponent;
+        while timescale_exponent < 0 {
+            time /= 10;
+            timescale_exponent += 1;
+        }
+        while timescale_exponent > 0 {
+            time *= 10;
+            timescale_exponent -= 1;
+        }
+        time
+    }
+}
+
+fn time_scale_exp(timescale: Option<Timescale>) -> i8 {
+    let mut timescale_exponent = timescale.and_then(|x| x.unit.to_exponent()).unwrap_or(0);
+    let mut factor = timescale.map_or(1, |x| x.factor);
 
     if factor == 0 {
         println!("Error: timescale factor is zero, setting it to 1");
@@ -100,9 +172,29 @@ fn write_header<P: AsRef<std::path::Path>>(
         factor /= 10;
         timescale_exponent += 1;
     }
+    timescale_exponent
+}
 
+fn write_header<P: AsRef<std::path::Path>>(
+    filename: P,
+    fst_file: impl AsRef<std::path::Path>,
+    filter_start_time: Option<TimeWithUnit>,
+    filter_end_time: Option<TimeWithUnit>,
+) -> (FstBodyWriter<BufWriter<File>>, SignalRefMap, Time, Time) {
+    // TODO: once wellen supports start/end time access in streaming mode, it will be enough to open
+    //       the file just once!
+    let wave = simple::read(filename).expect("failed to read input");
+    let timescale_exponent = time_scale_exp(wave.hierarchy().timescale());
+    let orig_start_time = *wave.time_table().first().unwrap();
+    let orig_end_time = *wave.time_table().last().unwrap();
+    let start_time: Time = filter_start_time
+        .map(|f| std::cmp::max(f.as_time(timescale_exponent), orig_start_time))
+        .unwrap_or(orig_start_time);
+    let end_time: Time = filter_end_time
+        .map(|f| std::cmp::min(f.as_time(timescale_exponent), orig_end_time))
+        .unwrap_or(orig_end_time);
     let info = FstInfo {
-        start_time: wave.time_table()[0],
+        start_time,
         timescale_exponent,
         version: wave.hierarchy().version().to_string(),
         date: wave.hierarchy().date().to_string(),
@@ -113,7 +205,7 @@ fn write_header<P: AsRef<std::path::Path>>(
     let out = out
         .finish()
         .expect("failed to write FST header or hierarchy");
-    (out, signal_ref_map)
+    (out, signal_ref_map, start_time, end_time)
 }
 
 type SignalRefMap = std::collections::HashMap<SignalRef, FstSignalId>;
