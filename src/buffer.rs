@@ -442,6 +442,29 @@ mod tests {
                 reference.extract_list(list_id, None)
             );
         }
+
+        // both implementations account for the data they hold. Asserted unconditionally, or
+        // whether the branch runs at all is left to whatever proptest happened to generate.
+        assert_eq!(
+            dut.size() > SingleVecLists::new(num_lists).size(),
+            !data.is_empty(),
+            "an entry costs a back pointer and a length even when its data is empty"
+        );
+        assert_eq!(
+            reference.size() > MultiVecLists::new(num_lists).size(),
+            data.iter().any(|(_, d)| !d.is_empty()),
+            "the reference stores the bytes and nothing else"
+        );
+
+        // and both give it all up on a clear
+        dut.clear();
+        reference.clear();
+        for list_id in 0..num_lists {
+            assert!(dut.extract_list(list_id, None).is_empty());
+            assert!(reference.extract_list(list_id, None).is_empty());
+        }
+        assert_eq!(dut.size(), SingleVecLists::new(num_lists).size());
+        assert_eq!(reference.size(), MultiVecLists::new(num_lists).size());
     }
 
     fn do_test_lists_fixed_len(len: u8, list_data: &[Vec<u8>]) {
@@ -467,6 +490,75 @@ mod tests {
                 reference.extract_list(list_id, Some(len))
             );
         }
+    }
+
+    fn buffer_with_signals(lens: &[u32]) -> SignalBuffer {
+        let signals = lens
+            .iter()
+            .map(|len| FstSignalType::bit_vec(*len))
+            .collect::<Vec<_>>();
+        SignalBuffer::new(&signals).unwrap()
+    }
+
+    /// A signal id past the end of the signal list is reported rather than indexed with.
+    #[test]
+    fn test_signal_change_with_invalid_signal_id() {
+        let mut buffer = buffer_with_signals(&[1, 1]);
+        // ids are one based, so 2 is the last valid one
+        buffer
+            .signal_change(FstSignalId::from_index(2), b"1")
+            .unwrap();
+        let err = buffer
+            .signal_change(FstSignalId::from_index(3), b"1")
+            .unwrap_err();
+        match err {
+            FstWriteError::InvalidSignalId(id) => assert_eq!(id, FstSignalId::from_index(3)),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// A value shorter than its signal that starts with none of the extendable characters cannot
+    /// be expanded, and there is no sensible value to fall back to.
+    #[test]
+    #[should_panic(expected = "Failed to parse four state value: hh for signal of size 4")]
+    fn test_signal_change_with_unexpandable_value() {
+        let mut buffer = buffer_with_signals(&[4]);
+        buffer
+            .signal_change(FstSignalId::from_index(1), b"hh")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_expand_special_vector_cases() {
+        // zero extension, whatever the leading bit is
+        assert_eq!(expand_special_vector_cases(b"1", 4), Some(b"0001".to_vec()));
+        assert_eq!(
+            expand_special_vector_cases(b"01", 4),
+            Some(b"0001".to_vec())
+        );
+        // x and z extension repeat the leading character, in either case
+        assert_eq!(
+            expand_special_vector_cases(b"x1", 4),
+            Some(b"xxx1".to_vec())
+        );
+        assert_eq!(
+            expand_special_vector_cases(b"X1", 4),
+            Some(b"XXX1".to_vec())
+        );
+        assert_eq!(
+            expand_special_vector_cases(b"z0", 4),
+            Some(b"zzz0".to_vec())
+        );
+        assert_eq!(
+            expand_special_vector_cases(b"Z0", 4),
+            Some(b"ZZZ0".to_vec())
+        );
+        // no rule covers the other characters
+        assert_eq!(expand_special_vector_cases(b"h", 4), None);
+        assert_eq!(expand_special_vector_cases(b"-", 4), None);
+        // a value that is not actually short is left alone
+        assert_eq!(expand_special_vector_cases(b"0011", 4), None);
+        assert_eq!(expand_special_vector_cases(b"00111", 4), None);
     }
 
     #[test]
