@@ -120,6 +120,59 @@ fn write_read_simple() {
     );
 }
 
+#[test]
+fn write_read_simple_in_memory() {
+    let version = "test 0.2.3";
+    let date = "2034-10-10";
+
+    ///////// write to an in-memory buffer instead of a file
+    let info = FstInfo {
+        start_time: 0,
+        timescale_exponent: 0,
+        version: version.to_string(),
+        date: date.to_string(),
+        file_type: FstFileType::Verilog,
+    };
+    let mut writer = new_in_memory(&info).unwrap();
+    writer
+        .scope("simple", "Simple", FstScopeType::Module)
+        .unwrap();
+    let a = writer
+        .var(
+            "a",
+            FstSignalType::bit_vec(1),
+            FstVarType::Logic,
+            FstVarDirection::Implicit,
+            None,
+        )
+        .unwrap();
+    writer.up_scope().unwrap();
+
+    let mut writer = writer.finish().unwrap();
+    writer.signal_change(a, b"0").unwrap();
+    writer.time_change(1).unwrap();
+    writer.signal_change(a, b"1").unwrap();
+
+    let buf = writer.finish().unwrap();
+    let bytes = buf.into_inner();
+    assert!(!bytes.is_empty());
+
+    //// read back the in-memory bytes
+    let mut wave = wellen::simple::read_from_reader(std::io::Cursor::new(bytes)).unwrap();
+
+    assert_eq!(wave.time_table(), [0, 1]);
+    assert_eq!(wave.hierarchy().date(), date);
+    assert_eq!(wave.hierarchy().version(), version);
+
+    let a_ref = SignalRef::from_index(0).unwrap();
+    wave.load_signals(&[a_ref]);
+    let signal_a = wave.get_signal(a_ref).unwrap();
+    assert_eq!(
+        signal_values_to_string(signal_a, wave.time_table()),
+        "(0: 0), (1: 1)"
+    );
+}
+
 use std::fmt::Write;
 fn signal_values_to_string(signal: &wellen::Signal, time_table: &[Time]) -> String {
     let mut out = String::new();

@@ -24,4 +24,4 @@ pub enum FstWriteError {
 }
 
 pub use types::*;
-pub use writer::{FstBodyWriter, FstHeaderWriter, open_fst};
+pub use writer::{FstBodyWriter, FstHeaderWriter, new_in_memory, open_fst};
