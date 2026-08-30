@@ -136,3 +136,71 @@ fn signal_values_to_string(signal: &wellen::Signal, time_table: &[Time]) -> Stri
     out.pop().unwrap();
     out
 }
+
+#[test]
+fn write_read_generic_string() {
+    let filename = "tests/generic_string.fst";
+    let version = "test 0.2.3";
+    let date = "2034-10-10";
+
+    ///////// write
+    let info = FstInfo {
+        start_time: 0,
+        timescale_exponent: 0,
+        version: version.to_string(),
+        date: date.to_string(),
+        file_type: FstFileType::Verilog,
+    };
+    let mut writer = open_fst(filename, &info).unwrap();
+    writer
+        .scope("simple", "Simple", FstScopeType::Module)
+        .unwrap();
+    let s = writer
+        .var(
+            "s",
+            FstSignalType::variable_length(),
+            FstVarType::GenericString,
+            FstVarDirection::Implicit,
+            None,
+        )
+        .unwrap();
+    writer.up_scope().unwrap();
+
+    // generic string signals have no initial (t=0) value, so the first change
+    // must come after an explicit time change
+    let mut writer = writer.finish().unwrap();
+    writer.time_change(1).unwrap();
+    writer.signal_change(s, b"hello").unwrap();
+    writer.time_change(5).unwrap();
+    writer.signal_change(s, b"world!").unwrap();
+    writer.time_change(8).unwrap();
+    writer.signal_change(s, b"").unwrap();
+    writer.finish().unwrap();
+
+    //// read
+    let mut wave = wellen::simple::read(filename).unwrap();
+    assert_eq!(wave.time_table(), [0, 1, 5, 8]);
+
+    let s_ref = SignalRef::from_index(0).unwrap();
+    wave.load_signals(&[s_ref]);
+    let time_table = wave.time_table().to_vec();
+    let signal_s = wave.get_signal(s_ref).unwrap();
+    let values: Vec<(Time, String)> = signal_s
+        .iter_changes()
+        .map(|(time_idx, value)| {
+            let value = match value {
+                wellen::SignalValueRef::String(v) => v.to_string(),
+                other => panic!("expected a string value, got {other:?}"),
+            };
+            (time_table[time_idx as usize], value)
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            (1, "hello".to_string()),
+            (5, "world!".to_string()),
+            (8, "".to_string()),
+        ]
+    );
+}

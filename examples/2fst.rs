@@ -75,8 +75,9 @@ fn main() {
                     out.signal_change(fst_id, bv.bit_string().as_bytes())
                         .expect("failed to write value change");
                 }
-                SignalValueRef::String(_value) => {
-                    todo!("deal with var len string");
+                SignalValueRef::String(value) => {
+                    out.signal_change(fst_id, value.as_bytes())
+                        .expect("failed to write value change");
                 }
                 SignalValueRef::Real(value) => {
                     let bytes = value.to_le_bytes();
@@ -89,6 +90,12 @@ fn main() {
         Ok(())
     })
     .expect("failed to parse signal changes");
+
+    // make sure the recorded end time covers the full simulation, even if the very last
+    // timestamp in the input has no value changes associated with it
+    if prev_time.is_none_or(|prev| prev < filter_end) {
+        out.time_change(filter_end).expect("failed time change");
+    }
 
     out.finish().expect("failed to finish writing the FST file");
 }
@@ -283,7 +290,7 @@ fn write_var<W: std::io::Write + std::io::Seek>(
     let var = &hier[var];
     let name = var.name(hier);
     let signal_tpe = match var.signal_encoding(hier) {
-        SignalEncoding::String => todo!("support varlen!"),
+        SignalEncoding::String => FstSignalType::variable_length(),
         SignalEncoding::Real => FstSignalType::real(),
         SignalEncoding::BitVector(len) => FstSignalType::bit_vec(len),
     };
@@ -317,14 +324,14 @@ fn write_var<W: std::io::Write + std::io::Seek>(
         VarType::Byte => FstVarType::Byte,
         VarType::Enum => FstVarType::Enum,
         VarType::ShortReal => FstVarType::ShortReal,
-        VarType::Boolean => todo!(),
-        VarType::BitVector => todo!(),
-        VarType::StdLogic => todo!(),
-        VarType::StdLogicVector => todo!(),
-        VarType::StdULogic => todo!(),
-        VarType::StdULogicVector => todo!(),
-        VarType::RealParameter => todo!(),
-        VarType::EventParameter => todo!(),
+        VarType::Boolean => FstVarType::Bit,
+        VarType::BitVector => FstVarType::Logic,
+        VarType::StdLogic => FstVarType::Bit,
+        VarType::StdLogicVector => FstVarType::Logic,
+        VarType::StdULogic => FstVarType::Bit,
+        VarType::StdULogicVector => FstVarType::Logic,
+        VarType::RealParameter => FstVarType::Real,
+        VarType::EventParameter => FstVarType::Event,
     };
     let dir = match var.direction() {
         VarDirection::Unknown => FstVarDirection::Implicit,

@@ -4,7 +4,7 @@
 
 use crate::io::{
     write_multi_bit_signal, write_one_bit_signal, write_time_chain_update,
-    write_value_change_section, write_variant_u64,
+    write_value_change_section, write_variable_length_signal, write_variant_u64,
 };
 use crate::{FstSignalId, FstSignalType, FstWriteError, Result};
 use std::borrow::Cow;
@@ -31,6 +31,10 @@ pub(crate) struct SignalBuffer {
     write_buf: Vec<u8>,
     /// is this the first buffer for the file that we are writing?
     first_buffer: bool,
+    /// has `time_change` been called yet for this buffer? The very first call always
+    /// registers a real time-table entry, even if it repeats the current end_time, so that
+    /// variable-length signals assigned right after it can be scheduled correctly.
+    time_change_called: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +43,8 @@ struct SignalInfo {
     len: u32,
     /// starting offset in the value buffer
     offset: u32,
+    /// variable-length signals (e.g. generic strings) have no fixed frame slot
+    is_variable_length: bool,
 }
 
 fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
@@ -48,6 +54,7 @@ fn gen_signal_info(signals: &[FstSignalType]) -> (Vec<SignalInfo>, usize) {
         out.push(SignalInfo {
             len: signal.len(),
             offset,
+            is_variable_length: signal.is_variable_length(),
         });
         offset += signal.len();
     }
@@ -74,14 +81,16 @@ impl SignalBuffer {
             time_table_index: 0,
             write_buf: vec![],
             first_buffer: true,
+            time_change_called: false,
         })
     }
 
     pub(crate) fn time_change(&mut self, new_time: u64) -> Result<()> {
         match new_time.cmp(&self.end_time) {
             Ordering::Less => Err(FstWriteError::TimeDecrease(self.end_time, new_time)),
-            Ordering::Equal => Ok(()),
-            Ordering::Greater => {
+            Ordering::Equal if self.time_change_called => Ok(()),
+            Ordering::Equal | Ordering::Greater => {
+                self.time_change_called = true;
                 let first_time_step = self.time_table.is_empty();
                 if first_time_step {
                     // at the end of the first step, we copy values over into the frame
@@ -107,6 +116,10 @@ impl SignalBuffer {
             Some(info) => info,
             None => return Err(FstWriteError::InvalidSignalId(signal_id)),
         };
+        let first_time_step = self.time_table.is_empty();
+        if info.is_variable_length {
+            return self.variable_length_signal_change(signal_id, value, first_time_step);
+        }
         let len = info.len as usize;
         let start = info.offset as usize;
         let range = start..start + len;
@@ -125,7 +138,6 @@ impl SignalBuffer {
         };
         let value = value_cow.as_ref();
         debug_assert_eq!(value.len(), len);
-        let first_time_step = self.time_table.is_empty();
         if first_time_step && self.first_buffer {
             self.values[range].copy_from_slice(value);
         } else {
@@ -156,6 +168,32 @@ impl SignalBuffer {
             // remember previous time-table index
             self.prev_time_table_index[signal_id.to_array_index()] = self.time_table_index;
         }
+        Ok(())
+    }
+
+    /// Variable-length signals (e.g. generic strings) have no frame slot and are never
+    /// de-duplicated: every call always appends a new value change entry. A value assigned
+    /// before the first real time step has no distinct earlier time to attach to (the format
+    /// has no initial state for variable-length signals), so it is recorded at the same slot
+    /// as the first real time step.
+    fn variable_length_signal_change(
+        &mut self,
+        signal_id: FstSignalId,
+        value: &[u8],
+        first_time_step: bool,
+    ) -> Result<()> {
+        if first_time_step && !self.first_buffer {
+            todo!("Currently we only support flushing right before a new time step.")
+        }
+        let time_table_idx_delta =
+            (self.time_table_index - self.prev_time_table_index[signal_id.to_array_index()]) as u64;
+        self.write_buf.clear();
+        write_variable_length_signal(&mut self.write_buf, time_table_idx_delta, value)?;
+        self.value_changes
+            .append(signal_id.to_array_index(), &self.write_buf, None);
+
+        // remember previous time-table index
+        self.prev_time_table_index[signal_id.to_array_index()] = self.time_table_index;
         Ok(())
     }
 
@@ -190,6 +228,7 @@ impl SignalBuffer {
         self.write_buf.clear();
         self.value_changes.clear();
         self.first_buffer = false;
+        self.time_change_called = false;
 
         // TODO: recycle?
         Ok(self.end_time)
