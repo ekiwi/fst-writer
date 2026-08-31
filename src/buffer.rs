@@ -31,6 +31,8 @@ pub(crate) struct SignalBuffer {
     write_buf: Vec<u8>,
     /// is this the first buffer for the file that we are writing?
     first_buffer: bool,
+    /// remove a consecutive value change that repeats the same value
+    deduplicate: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +85,12 @@ impl SignalBuffer {
             time_table_index: 0,
             write_buf: vec![],
             first_buffer: true,
+            deduplicate: true,
         })
+    }
+
+    pub(crate) fn set_deduplicate(&mut self, deduplicate: bool) {
+        self.deduplicate = deduplicate;
     }
 
     pub(crate) fn time_change(&mut self, new_time: u64) -> Result<()> {
@@ -144,7 +151,7 @@ impl SignalBuffer {
             }
 
             // check to see if there actually was a change
-            if &self.values[range.clone()] == value {
+            if self.deduplicate && &self.values[range.clone()] == value {
                 return Ok(());
             }
             self.values[range].copy_from_slice(value);

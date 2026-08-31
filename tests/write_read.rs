@@ -5,6 +5,7 @@
 // write FST files with fst-writer and read them again with the wellen library
 // (using fst-native as the backend)
 
+use fst_reader::{FstFilter, FstReader, FstSignalValue};
 use fst_writer::*;
 use wellen::{SignalRef, Time};
 
@@ -291,4 +292,84 @@ fn write_invalid_bit_vector_character() {
             "expected {bad:?} to be rejected, got: {err:?}"
         );
     }
+}
+
+/// Writes three value changes at times 10, 20 and 30, where the one at 20 repeats the value the
+/// signal already holds, and returns the raw value change records that come back out.
+///
+/// `wellen` collapses the repeat again on read, so this decodes the records with `fst-reader`
+/// instead.
+fn write_read_repeated_value_changes(filename: &str, deduplicate: bool) -> Vec<(u64, String)> {
+    let info = FstInfo {
+        start_time: 0,
+        timescale_exponent: -9,
+        version: "test 0.2.3".to_string(),
+        date: "2034-10-10".to_string(),
+        file_type: FstFileType::Verilog,
+    };
+    let mut writer = open_fst(filename, &info).unwrap();
+    let a = writer
+        .var(
+            "a",
+            FstSignalType::bit_vec(1),
+            FstVarType::Logic,
+            FstVarDirection::Implicit,
+            None,
+        )
+        .unwrap();
+    let mut writer = writer.finish().unwrap();
+    writer.set_deduplicate(deduplicate);
+
+    writer.time_change(10).unwrap();
+    writer.signal_change(a, b"1").unwrap();
+    writer.time_change(20).unwrap();
+    writer.signal_change(a, b"1").unwrap(); // the same value again
+    writer.time_change(30).unwrap();
+    writer.signal_change(a, b"0").unwrap();
+    writer.finish().unwrap();
+
+    let file = std::io::BufReader::new(std::fs::File::open(filename).unwrap());
+    let mut reader = FstReader::open(file).unwrap();
+    let mut changes = vec![];
+    reader
+        .read_signals(&FstFilter::all(), |time, _handle, value| {
+            // whatever the section start contributes at time 0 is not what this test is about
+            if time >= 10 {
+                let value = match value {
+                    FstSignalValue::String(value) => String::from_utf8_lossy(value).to_string(),
+                    FstSignalValue::Real(value) => format!("{value:?}"),
+                };
+                changes.push((time, value));
+            }
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+    changes
+}
+
+/// Without deduplication, a value change that repeats the value a signal already holds is still
+/// recorded, like the reference does with `FST_REMOVE_DUPLICATE_VC` disabled.
+#[test]
+fn write_read_repeated_value() {
+    let changes = write_read_repeated_value_changes("tests/repeated_value.fst", false);
+    assert_eq!(
+        changes,
+        [
+            (10, "1".to_string()),
+            (20, "1".to_string()),
+            (30, "0".to_string())
+        ],
+        "the repeated value change has to survive"
+    );
+}
+
+/// With deduplication, a value change that repeats the value a signal already holds is dropped.
+#[test]
+fn write_read_repeated_value_deduplicated() {
+    let changes = write_read_repeated_value_changes("tests/repeated_value_dedup.fst", true);
+    assert_eq!(
+        changes,
+        [(10, "1".to_string()), (30, "0".to_string())],
+        "the repeated value change has to be dropped"
+    );
 }

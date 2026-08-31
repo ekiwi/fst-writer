@@ -120,6 +120,14 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.signal_change(signal_id, value)
     }
 
+    /// Enable or disable value change deduplication. By default, it is enabled.
+    ///
+    /// If `true`, a [`signal_change`](Self::signal_change) with the same value as the last recorded
+    /// value for that signal will be dropped. If `false`, it will be recorded anyway.
+    pub fn set_deduplicate(&mut self, deduplicate: bool) {
+        self.buffer.set_deduplicate(deduplicate);
+    }
+
     /// flushes all value change data to disk
     pub fn flush(&mut self) -> Result<()> {
         self.buffer.flush(&mut self.out)?;
