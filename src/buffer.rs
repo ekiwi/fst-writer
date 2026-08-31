@@ -42,6 +42,8 @@ pub(crate) struct SignalBuffer {
     signal_change_emitted: bool,
     /// start time of the first value change section
     first_time: u64,
+    /// is a flush waiting to be acted on by the next time change?
+    flush_pending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,7 @@ impl SignalBuffer {
             first_buffer: true,
             signal_change_emitted: false,
             first_time: 0,
+            flush_pending: false,
         })
     }
 
@@ -112,12 +115,13 @@ impl SignalBuffer {
             return Ok(());
         }
 
+        // In the first block we enter the conditional above, and subsequent blocks already have a
+        // initial time step in the time table.
+        debug_assert!(!self.time_table.is_empty());
+
         match new_time.cmp(&self.end_time) {
             Ordering::Less => Err(FstWriteError::TimeDecrease(self.end_time, new_time)),
             Ordering::Equal => Ok(()),
-            // the first step of a section is not captured in the time table index, but instead in
-            // the start_time
-            Ordering::Greater if self.time_table.is_empty() => self.start_time_step(new_time),
             Ordering::Greater => {
                 self.time_table_index += 1;
                 // write timetable in compressed format
@@ -166,16 +170,18 @@ impl SignalBuffer {
             self.values[range].copy_from_slice(value);
             self.signal_change_emitted = true;
         } else {
-            if self.time_table.is_empty() {
-                todo!("Currently we only support flushing right before a new time step.")
-            }
-
+            // A section always holds at least one time step here: the initial time is handled
+            // above, and [`Self::flush`] opens the next section with the time the previous one
+            // closed at.
+            debug_assert!(
+                !self.time_table.is_empty(),
+                "no time step to attach the value to"
+            );
             // check to see if there actually was a change
             if &self.values[range.clone()] == value {
                 return Ok(());
             }
             self.values[range].copy_from_slice(value);
-            // write down value change
             self.append_value_change(signal_id.to_array_index())?;
         }
         Ok(())
@@ -204,6 +210,24 @@ impl SignalBuffer {
     /// Returns true if the current section holds at least one value change.
     pub(crate) fn has_value_changes(&self) -> bool {
         !self.value_changes.is_empty()
+    }
+
+    /// Queues a flush for the next [`Self::time_change`] to act on. If less than 3 time steps has
+    /// been issued for this block, the request is dropped.
+    pub(crate) fn request_flush(&mut self) {
+        // this limit is arbitrary, just matches fstapi
+        if self.time_table_index <= 1 {
+            return;
+        }
+
+        self.flush_pending = true;
+    }
+
+    /// Whether a queued flush is to be acted on now. The request is cleared either way.
+    ///
+    /// A request that finds nothing to write is dropped.
+    pub(crate) fn take_pending_flush(&mut self) -> bool {
+        std::mem::take(&mut self.flush_pending) && self.has_value_changes()
     }
 
     /// Returns true if the first [`time_change`] has yet to be issued.
@@ -269,6 +293,8 @@ impl SignalBuffer {
         }
         self.start_time = self.end_time;
         self.time_table.clear();
+        // The next section opens with the time this one closed at.
+        write_time_chain_update(&mut self.time_table, 0, self.end_time)?;
         self.write_buf.clear();
         self.value_changes.clear();
         self.first_buffer = false;

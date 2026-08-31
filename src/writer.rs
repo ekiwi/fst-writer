@@ -114,6 +114,11 @@ pub struct FstBodyWriter<W: std::io::Write + std::io::Seek> {
 
 impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     pub fn time_change(&mut self, time: u64) -> Result<()> {
+        // flush the block if pending
+        if self.buffer.take_pending_flush() {
+            self.buffer.flush(&mut self.out)?;
+            self.finish_info.num_value_change_sections += 1;
+        }
         self.buffer.time_change(time)
     }
 
@@ -121,15 +126,13 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.signal_change(signal_id, value)
     }
 
-    /// flushes all value change data to disk
+    /// Queues a flush of the value change data collected so far.
+    ///
+    /// The section is written out by the next [`Self::time_change`]. A request made before a call
+    /// to signal_change in the current section is dropped. The flush is canceled if no signal
+    /// change was issued since the last flush.
     pub fn flush(&mut self) -> Result<()> {
-        if !self.buffer.has_value_changes() {
-            // the reference never writes out a section without any value change; the section
-            // stays open instead, so later value changes join it
-            return Ok(());
-        }
-        self.buffer.flush(&mut self.out)?;
-        self.finish_info.num_value_change_sections += 1;
+        self.buffer.request_flush();
         Ok(())
     }
 
