@@ -59,6 +59,11 @@ impl FstSignalType {
         Self(SignalType::Real)
     }
 
+    /// A variable-length signal, e.g. for `FstVarType::GenericString`.
+    pub fn variable_length() -> Self {
+        Self::bit_vec(0)
+    }
+
     pub(crate) fn to_file_format(self) -> u32 {
         match self.0 {
             SignalType::BitVec(value) => match value.get() {
@@ -69,12 +74,37 @@ impl FstSignalType {
         }
     }
 
+    /// Variable-length signals have no fixed byte length and are not stored in the frame.
+    #[inline]
+    pub(crate) fn is_variable_length(&self) -> bool {
+        matches!(self.0, SignalType::BitVec(value) if value.get() == 1)
+    }
+
     #[inline]
     pub(crate) fn len(&self) -> u32 {
         match self.0 {
             SignalType::BitVec(value) => value.get() - 1,
             SignalType::Real => 8,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FstSignalType;
+
+    #[test]
+    fn string_uses_variable_length_bit_vector_encoding() {
+        let string = FstSignalType::variable_length();
+        assert_eq!(string.to_file_format(), u32::MAX);
+        assert_eq!(string.len(), 0);
+        assert!(string.is_variable_length());
+    }
+
+    #[test]
+    fn zero_length_bit_vector_is_variable_length() {
+        assert!(FstSignalType::bit_vec(0).is_variable_length());
+        assert!(!FstSignalType::bit_vec(1).is_variable_length());
     }
 }
 

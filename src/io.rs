@@ -356,6 +356,19 @@ pub(crate) fn write_real_signal(
 }
 
 #[inline]
+pub(crate) fn write_variable_length_signal(
+    output: &mut impl Write,
+    time_delta: u64,
+    value: &[u8],
+) -> Result<()> {
+    // bit 0 is reserved for future use and must currently always be zero
+    write_variant_u64(output, time_delta << 1)?;
+    write_variant_u64(output, value.len() as u64)?;
+    output.write_all(value)?;
+    Ok(())
+}
+
+#[inline]
 fn is_digital(values: &[u8]) -> bool {
     values.iter().all(|v| matches!(*v, b'0' | b'1'))
 }
