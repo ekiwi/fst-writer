@@ -2,6 +2,10 @@
 # released under BSD 3-Clause License
 # author: Kevin Laeufer <laeufer@cornell.edu>
 
+[workspace]
+
+members = ["fuzz"]
+
 [package]
 name = "fst-writer"
 version = "0.3.1"
@@ -17,6 +21,7 @@ keywords = ["fst", "waveform", "wavedump"]
 lz4_flex = "0.14"
 miniz_oxide = "0.9"
 thiserror = "2.0"
+arbitrary = { version = "1.4.2", features = ["derive"], optional = true }
 
 [dev-dependencies]
 wellen = "0.25.6"

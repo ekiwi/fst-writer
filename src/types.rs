@@ -86,6 +86,7 @@ impl FstSignalType {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum FstScopeType {
     // VCD
     Module = 0,
