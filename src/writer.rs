@@ -90,7 +90,8 @@ impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
         write_geometry(&mut self.out, &self.signals)?;
         let buffer = SignalBuffer::new(&self.signals)?;
         let finish_info = HeaderFinishInfo {
-            end_time: 0, // currently unknown
+            start_time: 0, // currently unknown
+            end_time: 0,   // currently unknown
             scope_count: self.scope_count,
             var_count: self.var_count,
             num_signals: self.signals.len() as u64,
@@ -113,6 +114,11 @@ pub struct FstBodyWriter<W: std::io::Write + std::io::Seek> {
 
 impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     pub fn time_change(&mut self, time: u64) -> Result<()> {
+        // flush the block if pending
+        if self.buffer.take_pending_flush() {
+            self.buffer.flush(&mut self.out)?;
+            self.finish_info.num_value_change_sections += 1;
+        }
         self.buffer.time_change(time)
     }
 
@@ -120,10 +126,13 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.signal_change(signal_id, value)
     }
 
-    /// flushes all value change data to disk
+    /// Queues a flush of the value change data collected so far.
+    ///
+    /// The section is written out by the next [`Self::time_change`]. A request made before a call
+    /// to signal_change in the current section is dropped. The flush is canceled if no signal
+    /// change was issued since the last flush.
     pub fn flush(&mut self) -> Result<()> {
-        self.buffer.flush(&mut self.out)?;
-        self.finish_info.num_value_change_sections += 1;
+        self.buffer.request_flush();
         Ok(())
     }
 
@@ -133,11 +142,20 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
     }
 
     pub fn finish(mut self) -> Result<()> {
-        // write value change section
-        let end_time = self.buffer.flush(&mut self.out)?;
+        if self.buffer.is_initial_time() {
+            self.buffer.mock_initial_time_step()?;
+        }
+
+        // write the value change section, unless it would hold no value change at all
+        let end_time = if self.buffer.has_value_changes() {
+            self.finish_info.num_value_change_sections += 1;
+            self.buffer.flush(&mut self.out)?
+        } else {
+            self.buffer.end_time()
+        };
 
         // update info
-        self.finish_info.num_value_change_sections += 1;
+        self.finish_info.start_time = self.buffer.first_time();
         self.finish_info.end_time = end_time;
         update_header(&mut self.out, &self.finish_info)?;
 
