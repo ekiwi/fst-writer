@@ -20,6 +20,7 @@ thiserror = "2.0"
 
 [dev-dependencies]
 wellen = "0.25.6"
+fst-reader = "0.17.0"
 proptest = "1.11"
 clap = { version = "4.6", features = ["derive"] }
 
