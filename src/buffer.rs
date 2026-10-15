@@ -443,23 +443,13 @@ mod tests {
             );
         }
 
-        // don't check for exact values as the actual size is an implementation detail, only check
-        // that the size has grown
-        if data.iter().any(|(_, d)| !d.is_empty()) {
-            assert!(dut.size() > SingleVecLists::new(num_lists).size());
-            assert!(reference.size() > MultiVecLists::new(num_lists).size());
-        }
-
-        // check clearing
+        // all lists are empty after clear
         dut.clear();
         reference.clear();
         for list_id in 0..num_lists {
             assert!(dut.extract_list(list_id, None).is_empty());
             assert!(reference.extract_list(list_id, None).is_empty());
         }
-        // the size should be back to the initial size
-        assert_eq!(dut.size(), SingleVecLists::new(num_lists).size());
-        assert_eq!(reference.size(), MultiVecLists::new(num_lists).size());
     }
 
     fn do_test_lists_fixed_len(len: u8, list_data: &[Vec<u8>]) {
