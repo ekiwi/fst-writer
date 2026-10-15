@@ -34,8 +34,8 @@ const FLUSH_AT: usize = 32 * 1024 * 1024;
 
 fn main() {
     let args = Args::parse();
-    let start_time = args.start_time.as_ref().map(|s| parse_time(&s));
-    let end_time = args.end_time.as_ref().map(|s| parse_time(&s));
+    let start_time = args.start_time.as_ref().map(|s| parse_time(s));
+    let end_time = args.end_time.as_ref().map(|s| parse_time(s));
     let (mut out, signal_ref_map, filter_start, filter_end) =
         write_header(args.input.clone(), args.fst_file, start_time, end_time);
     let load_opts = LoadOptions::default();
