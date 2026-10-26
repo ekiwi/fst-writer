@@ -9,11 +9,13 @@ use fst_reader::{FstFilter, FstReader, FstSignalValue};
 use fst_writer::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
+use wellen::simple::Waveform;
 use wellen::{SignalRef, Time};
 
-#[test]
-fn write_read_simple() {
-    let filename = "tests/simple.fst";
+fn write_read_simple<W: std::io::Write + std::io::Seek>(
+    open: impl FnOnce(&FstInfo) -> fst_writer::Result<FstHeaderWriter<W>>,
+    read: impl FnOnce(W) -> wellen::Result<Waveform>,
+) {
     let version = "test 0.2.3";
     let date = "2034-10-10";
 
@@ -25,7 +27,7 @@ fn write_read_simple() {
         date: date.to_string(),
         file_type: FstFileType::Verilog,
     };
-    let mut writer = open_fst(filename, &info).unwrap();
+    let mut writer = open(&info).unwrap();
     writer
         .scope("simple", "Simple", FstScopeType::Module)
         .unwrap();
@@ -78,10 +80,10 @@ fn write_read_simple() {
     writer.time_change(8).unwrap();
     writer.signal_change(a, b"Z").unwrap();
 
-    writer.finish().unwrap();
+    let out = writer.finish().unwrap();
 
     //// read
-    let mut wave = wellen::simple::read(filename).unwrap();
+    let mut wave = read(out).unwrap();
 
     // timetable
     assert_eq!(wave.time_table(), [0, 1, 5, 7, 8]);
@@ -124,60 +126,25 @@ fn write_read_simple() {
 }
 
 #[test]
-fn write_read_simple_in_memory() {
-    let version = "test 0.2.3";
-    let date = "2034-10-10";
-
-    ///////// write to an in-memory buffer instead of a file
-    let info = FstInfo {
-        start_time: 0,
-        timescale_exponent: 0,
-        version: version.to_string(),
-        date: date.to_string(),
-        file_type: FstFileType::Verilog,
-    };
-    let mut writer = new_in_memory(&info).unwrap();
-    writer
-        .scope("simple", "Simple", FstScopeType::Module)
-        .unwrap();
-    let a = writer
-        .var(
-            "a",
-            FstSignalType::bit_vec(1),
-            FstVarType::Logic,
-            FstVarDirection::Implicit,
-            None,
-        )
-        .unwrap();
-    writer.up_scope().unwrap();
-
-    let mut writer = writer.finish().unwrap();
-    writer.signal_change(a, b"0").unwrap();
-    writer.time_change(1).unwrap();
-    writer.signal_change(a, b"1").unwrap();
-
-    let buf = writer.finish().unwrap();
-    let bytes = buf.into_inner();
-    assert!(!bytes.is_empty());
-
-    //// read back the in-memory bytes
-    let mut wave = wellen::simple::read_from_reader(std::io::Cursor::new(bytes)).unwrap();
-
-    assert_eq!(wave.time_table(), [0, 1]);
-    assert_eq!(wave.hierarchy().date(), date);
-    assert_eq!(wave.hierarchy().version(), version);
-
-    let a_ref = SignalRef::from_index(0).unwrap();
-    wave.load_signals(&[a_ref]);
-    let signal_a = wave.get_signal(a_ref).unwrap();
-    assert_eq!(
-        signal_values_to_string(signal_a, wave.time_table()),
-        "(0: 0), (1: 1)"
+fn test_write_read_simple_file() {
+    let filename = "tests/simple.fst";
+    write_read_simple(
+        |info| open_fst(filename, info),
+        |_| wellen::simple::read(filename),
     );
 }
 
-use std::fmt::Write;
+#[test]
+fn write_read_simple_in_memory() {
+    write_read_simple(FstHeaderWriter::write_to_mem, |buf| {
+        let bytes = buf.into_inner();
+        assert!(!bytes.is_empty());
+        wellen::simple::read_from_reader(std::io::Cursor::new(bytes))
+    });
+}
+
 fn signal_values_to_string(signal: &wellen::Signal, time_table: &[Time]) -> String {
+    use std::fmt::Write;
     let mut out = String::new();
     for (time, value) in signal.iter_changes() {
         write!(

@@ -18,11 +18,6 @@ pub fn open_fst<P: AsRef<std::path::Path>>(
     FstHeaderWriter::open(path, info)
 }
 
-/// Creates a header writer that writes to an in-memory buffer.
-pub fn new_in_memory(info: &FstInfo) -> Result<FstHeaderWriter<std::io::Cursor<Vec<u8>>>> {
-    FstHeaderWriter::new(std::io::Cursor::new(Vec::new()), info)
-}
-
 pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
     out: W,
     /// collect hierarchy section before compressing it
@@ -34,10 +29,16 @@ pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
 }
 
 impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
-    fn open<P: AsRef<std::path::Path>>(path: P, info: &FstInfo) -> Result<Self> {
+    pub fn open<P: AsRef<std::path::Path>>(path: P, info: &FstInfo) -> Result<Self> {
         let f = std::fs::File::create(path)?;
         let out = std::io::BufWriter::new(f);
         Self::new(out, info)
+    }
+}
+
+impl FstHeaderWriter<std::io::Cursor<Vec<u8>>> {
+    pub fn write_to_mem(info: &FstInfo) -> Result<Self> {
+        Self::new(std::io::Cursor::new(Vec::new()), info)
     }
 }
 

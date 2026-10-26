@@ -7,7 +7,7 @@ mod io;
 mod types;
 mod writer;
 
-type Result<T> = std::result::Result<T, FstWriteError>;
+pub type Result<T> = std::result::Result<T, FstWriteError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FstWriteError {
@@ -24,4 +24,4 @@ pub enum FstWriteError {
 }
 
 pub use types::*;
-pub use writer::{FstBodyWriter, FstHeaderWriter, new_in_memory, open_fst};
+pub use writer::{FstBodyWriter, FstHeaderWriter, open_fst};
