@@ -7,7 +7,7 @@ mod io;
 mod types;
 mod writer;
 
-type Result<T> = std::result::Result<T, FstWriteError>;
+pub type Result<T> = std::result::Result<T, FstWriteError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FstWriteError {

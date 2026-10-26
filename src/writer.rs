@@ -29,9 +29,21 @@ pub struct FstHeaderWriter<W: std::io::Write + std::io::Seek> {
 }
 
 impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
-    fn open<P: AsRef<std::path::Path>>(path: P, info: &FstInfo) -> Result<Self> {
+    pub fn open<P: AsRef<std::path::Path>>(path: P, info: &FstInfo) -> Result<Self> {
         let f = std::fs::File::create(path)?;
-        let mut out = std::io::BufWriter::new(f);
+        let out = std::io::BufWriter::new(f);
+        Self::new(out, info)
+    }
+}
+
+impl FstHeaderWriter<std::io::Cursor<Vec<u8>>> {
+    pub fn write_to_mem(info: &FstInfo) -> Result<Self> {
+        Self::new(std::io::Cursor::new(Vec::new()), info)
+    }
+}
+
+impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
+    pub fn new(mut out: W, info: &FstInfo) -> Result<Self> {
         write_header_meta_data(&mut out, info)?;
         Ok(Self {
             out,
@@ -42,9 +54,6 @@ impl FstHeaderWriter<std::io::BufWriter<std::fs::File>> {
             scope_count: 0,
         })
     }
-}
-
-impl<W: std::io::Write + std::io::Seek> FstHeaderWriter<W> {
     pub fn scope(
         &mut self,
         name: impl AsRef<str>,
@@ -140,7 +149,7 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.buffer.size()
     }
 
-    pub fn finish(mut self) -> Result<()> {
+    pub fn finish(mut self) -> Result<W> {
         // write value change section
         let end_time = self.buffer.flush(&mut self.out)?;
 
@@ -149,6 +158,6 @@ impl<W: std::io::Write + std::io::Seek> FstBodyWriter<W> {
         self.finish_info.end_time = end_time;
         update_header(&mut self.out, &self.finish_info)?;
 
-        Ok(())
+        Ok(self.out)
     }
 }
